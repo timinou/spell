@@ -832,7 +832,14 @@ defmodule SpellAgent.Tui.App do
     # raise. `DataBag.build/3` merges the cache as heavy members, under the core
     # keys. The multi-session cockpit's `data/sessions` is ONE such registered
     # source (see `SpellAgent.Tui.Cockpit.install/0`), not a name this loop knows.
-    data_sources =
+    # LAST-GOOD merge (review Sβ P2): resolve_all/1 returns ONLY the sources that
+    # succeeded THIS reproject; a source that raised is omitted from that map. If
+    # we replaced `data_sources` outright, a transient producer failure would
+    # yank an already-good `data/<name>` from every frame until a later success.
+    # Instead merge the fresh results OVER the prior cache, so a momentarily-sick
+    # source keeps showing its last-good value — the never-brick ladder's
+    # last-good rung, held at the App layer where the cross-reproject state lives.
+    fresh_sources =
       DataSource.Registry.resolve_all(%{
         hist_store: state.hist_store,
         hist_session: state.hist_session,
@@ -840,6 +847,8 @@ defmodule SpellAgent.Tui.App do
         ui: state.ui,
         forest: forest
       })
+
+    data_sources = Map.merge(Map.get(state, :data_sources, %{}), fresh_sources)
 
     state =
       state

@@ -63,6 +63,15 @@ defmodule SpellAgent.Tui.DataSourceRegistryTest do
       assert resolved["ok"] == :fine
       refute Map.has_key?(resolved, "dead")
     end
+
+    test "a producer that THROWS is omitted, never propagates (review Sβ P1)" do
+      :ok = Registry.register("ok", fn _ -> :fine end)
+      :ok = Registry.register("thrower", fn _ -> throw(:nope) end)
+
+      resolved = Registry.resolve_all(%{})
+      assert resolved["ok"] == :fine
+      refute Map.has_key?(resolved, "thrower")
+    end
   end
 
   describe "bounds + validation" do

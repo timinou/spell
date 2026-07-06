@@ -209,9 +209,19 @@ defmodule SpellAgent.Tui.DefaultLayout do
   }
 
   # The presentation-derivation source for `key`: the data file's entry, or the
-  # compiled floor. A non-binary/empty data entry falls back (never-brick).
+  # compiled floor. Never-brick (review Sβ P1): the `"presentation"` value may be
+  # a NON-MAP (a malformed data file where it is a string/list) — `Map.get/2` on a
+  # non-map raises `BadMapError`, which would brick the render path BEFORE the
+  # compiled fallback runs. Guard the section to a map first, so any malformed
+  # shape (absent, string, list, number) falls straight through to the floor.
   defp presentation_source(key) do
-    case data() |> Map.get("presentation", %{}) |> Map.get(key) do
+    section =
+      case data() do
+        %{"presentation" => m} when is_map(m) -> m
+        _ -> %{}
+      end
+
+    case Map.get(section, key) do
       src when is_binary(src) and src != "" -> src
       _ -> Map.fetch!(@fallback_presentation, key)
     end

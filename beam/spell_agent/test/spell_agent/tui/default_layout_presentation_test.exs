@@ -104,5 +104,21 @@ defmodule SpellAgent.Tui.DefaultLayoutPresentationTest do
       env = status_env(%{"running?" => true, "turns" => 1, "tools" => 1})
       assert resolve("status", :text, env) == "● running…  turns 1 · tools 1"
     end
+
+    test "a NON-MAP presentation section falls back to the floor, never BadMapError (review Sβ P1)" do
+      # The malformed shape the reviewer flagged: `presentation` is a valid
+      # top-level entry but its VALUE is a string, not a map. Map.get/2 on a
+      # non-map would raise BadMapError and brick the render path; the guard must
+      # route it to the compiled floor instead.
+      :persistent_term.put({DefaultLayout, :data}, %{"presentation" => "not a map"})
+      on_exit(fn -> DefaultLayout.reload() end)
+
+      env = status_env(%{"result" => "error", "turns" => 2, "tools" => 0})
+      assert resolve("status", :text, env) == "✗ failed  turns 2 · tools 0"
+      assert resolve("status", :color, env) == "red"
+      # And the composer side of the same malformed section:
+      cenv = composer_env("insert", "hi", "h")
+      assert resolve("composer", :text, cenv) == "hi▎"
+    end
   end
 end

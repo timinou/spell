@@ -157,6 +157,15 @@ defmodule SpellAgent.Tui.DataSource.Registry do
         :error -> acc
       end
     end)
+  rescue
+    # Outer guard for the `all/0` TOCTOU race (review Sβ P2): `all/0` checks
+    # `Process.whereis/1` then calls `Agent.get/2`; if the registry exits
+    # BETWEEN those, `Agent.get/2` raises/exits. This best-effort seam must
+    # NEVER propagate into `App.reproject/2` — an absent/restarting registry
+    # yields no sources, exactly like an empty one.
+    _ -> %{}
+  catch
+    _, _ -> %{}
   end
 
   @doc "Wipe all registered sources (test reset). Keeps the process."
@@ -172,7 +181,11 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   rescue
     _ -> :error
   catch
-    :exit, _ -> :error
+    # Catch EVERY non-local exit — not just `:exit` (review Sβ P1): a producer
+    # that `throw/1`s (or a `:throw`/`:error` non-local exit) would otherwise
+    # bypass this clause and propagate out of `resolve_all/1` into the render
+    # loop. A sick source is DATA (omitted), never a crash.
+    _, _ -> :error
   end
 
   defp agent_up?, do: Process.whereis(__MODULE__) != nil
