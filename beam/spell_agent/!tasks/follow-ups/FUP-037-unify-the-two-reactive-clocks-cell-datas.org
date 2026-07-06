@@ -1,5 +1,5 @@
 #+TITLE: Unify the two reactive clocks — Cell + DataSource into one Reactive.Binding
-#+STATE: ITEM
+#+STATE: BLOCKED
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: FUP-037-unify-the-two-reactive-clocks-cell-datas
@@ -34,3 +34,5 @@ HIGH — the Cell path is proven and load-bearing (PROJ-004, the reactive substr
 * Depends on
 - PLAN-027 M1 (producer-as-data — so both clocks already take frozen PTC programs).
 - Oracle design gate.
+
+NOTE [2026-07-06]: ORACLE DESIGN GATE (agent 24-M2UnifyClocksDesign): verdict DEFER. The two reactive registries are NOT "one idea, two clocks" — they are two different ideas that both happen to freeze a PTC program. Cell.Registry: SLOW clock, dep-diffed (HoleDiff.dependencies at define time), debounced per-cell, off-process Task resolve, generation+CAS guarded, volatile last-resolved. DataSource.Registry: QUERY clock, unconditional sync resolve on reproject, no dep set, App-level last-good cache. A unified `clock` enum would require conditional debounce/CAS/generation branches PER ENTRY — bleeding clock-polymorphism INTO the substrate, the opposite of the FUP-030 doctrine, while risking the proven Cell path for a false abstraction. Critically: the ONLY genuinely shared seam (frozen-program -> sanitized-value via a read-only tier + never-brick) is ALREADY EXTRACTED — DataSource.Registry.safe_produce reuses Cell.resolve/3. So the "cheap now" step the oracle would recommend is already done. DEFER signal to revisit: when a THIRD reactive binding appears that fits neither clock cleanly, OR when usage shows one clock driving out the other. Not blocking any downstream wave (M4/M5/M6/M7 do not depend on unification). Kept as a standing FUP; not scheduled.
