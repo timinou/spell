@@ -38,8 +38,6 @@ defmodule SpellAgent.Tui.Cockpit do
   result as a heavy `data/*` member, exactly like `forest`/`vms`.
   """
 
-  alias SpellAgent.SessionRegistry
-  alias SpellAgent.Hist.Trace
   alias SpellAgent.Tui.DataSource
 
   # The `data/*` binding this source produces. The layout reads `data/sessions`.
@@ -82,10 +80,6 @@ defmodule SpellAgent.Tui.Cockpit do
   # render cost (N panes) and the atom/term cost of the projected data. Sessions
   # beyond this are not shown in the overview (newest-first from the registry).
   @max_sessions 12
-
-  # Per card, only the last-N turns are carried into the overview — a card is a
-  # glance, not a transcript. Drill-in (a lens op) shows the full inspector.
-  @snapshot_turns 3
 
   @typedoc """
   One cockpit row — a session's live meta unioned with a bounded content summary,
@@ -244,152 +238,27 @@ defmodule SpellAgent.Tui.Cockpit do
   """
   @spec sessions(term()) :: [row()]
   def sessions(store) do
-    SessionRegistry.lineage()
+    # The compiled floor unions the SAME two source primitives the `.ptc` producer
+    # uses (DataSource.Tools) — so the fallback shows exactly what the data path
+    # does: the recorded sessions (finished + running) enriched with live lineage,
+    # each merged with its bounded content summary. ONE union implementation, no
+    # drift between the data producer and its Elixir floor.
+    tier = DataSource.Tools.read_only(%{hist_store: store})
+    lineage_fn = Map.fetch!(tier, "session-registry/lineage")
+    summary_fn = Map.fetch!(tier, "hist/trace-summary")
+
+    lineage_fn.(%{})
     |> Enum.take(@max_sessions)
-    |> Enum.map(&decorate(&1, store))
+    |> Enum.map(fn row -> Map.merge(row, summary_fn.(%{"id" => row["id"]})) end)
   rescue
     _ -> []
   catch
     :exit, _ -> []
   end
 
-  # ---- per-session union (best-effort, isolated) ----
-
-  # Union one session's live meta with its content summary. Wrapped so a single
-  # failing session degrades to a minimal card carrying just its meta — the OTHER
-  # cards are never lost to one sick session (the per-row failure ladder).
-  defp decorate(meta, store) do
-    base = meta_row(meta)
-
-    content =
-      try do
-        summarize(safe_rows(store, meta.session_id))
-      rescue
-        _ -> unavailable()
-      catch
-        :exit, _ -> unavailable()
-      end
-
-    Map.merge(base, content)
-  end
-
-  # The always-present meta half, string-keyed for PTC. Never touches the store.
-  defp meta_row(meta) do
-    %{
-      "id" => Map.get(meta, :session_id),
-      "owner" => owner_string(Map.get(meta, :owner)),
-      "parent-id" => Map.get(meta, :parent_id),
-      "intent" => Map.get(meta, :intent),
-      "region" => Map.get(meta, :region),
-      "status" => status_string(Map.get(meta, :status))
-    }
-  end
-
-  # ---- content summary from the conversation trace ----
-
-  defp summarize(rows) when is_list(rows) do
-    %{
-      "turns" => length(rows),
-      "cost" => total_tokens(rows),
-      "running?" => running?(rows),
-      "last" => last_activity(rows),
-      "spans" => rows |> Enum.take(-@snapshot_turns) |> Enum.map(&span_row/1)
-    }
-  end
-
-  # The content half when this session's trace could not be read.
-  defp unavailable do
-    %{
-      "turns" => 0,
-      "cost" => 0,
-      "running?" => false,
-      "last" => "(snapshot unavailable)",
-      "spans" => []
-    }
-  end
-
-  defp safe_rows(store, session_id) when is_binary(session_id) do
-    Trace.rows(store, session_id)
-  end
-
-  defp safe_rows(_store, _sid), do: []
-
-  # Sum input + output tokens across every turn that recorded them. A turn with
-  # nil tokens contributes zero — a running session's latest turn often has none
-  # yet, which must not crash the sum.
-  defp total_tokens(rows) do
-    Enum.reduce(rows, 0, fn row, acc ->
-      case Map.get(row, :tokens) do
-        %{input: i, output: o} when is_integer(i) and is_integer(o) -> acc + i + o
-        _ -> acc
-      end
-    end)
-  end
-
-  # A session is "running" if its most recent turn is still pending (no terminal
-  # status). Best-effort: an empty trace is not running.
-  defp running?([]), do: false
-
-  defp running?(rows) do
-    case List.last(rows) do
-      %{status: status} -> status not in [:ok, :error, "ok", "error"]
-      _ -> false
-    end
-  end
-
-  # A one-line "what this session is doing now" — the last turn's most salient
-  # text: its assistant say, else its prompt, else a result glimpse.
-  defp last_activity([]), do: "(no activity yet)"
-
-  defp last_activity(rows) do
-    case List.last(rows) do
-      %{} = row -> row |> salient_text() |> oneline(70)
-      _ -> "(no activity yet)"
-    end
-  end
-
-  defp salient_text(%{say: say}) when is_binary(say) and say != "", do: say
-  defp salient_text(%{prompt: p}) when is_binary(p) and p != "", do: p
-  defp salient_text(%{form_src: f}) when is_binary(f) and f != "", do: f
-  defp salient_text(%{result: r}) when not is_nil(r), do: result_glimpse(r)
-  defp salient_text(_), do: "(working…)"
-
-  defp result_glimpse(r) when is_binary(r), do: r
-  defp result_glimpse(r), do: inspect(r)
-
-  # One span row for a card line: sequence, status glyph key, and a one-line title.
-  defp span_row(row) do
-    %{
-      "seq" => Map.get(row, :seq),
-      "status" => span_status(Map.get(row, :status)),
-      "title" => row |> salient_text() |> oneline(48)
-    }
-  end
-
-  # ---- coercions (bounded, PTC-safe strings) ----
-
-  defp owner_string(:human), do: "human"
-  defp owner_string({:session, parent}) when is_binary(parent), do: "session:" <> parent
-  defp owner_string(nil), do: "human"
-  defp owner_string(other), do: inspect(other)
-
-  defp status_string(s) when is_atom(s) and not is_nil(s), do: Atom.to_string(s)
-  defp status_string(s) when is_binary(s), do: s
-  defp status_string(_), do: "running"
-
-  defp span_status(s) when s in [:ok, "ok"], do: "ok"
-  defp span_status(s) when s in [:error, "error"], do: "error"
-  defp span_status(_), do: "running"
-
-  defp oneline(s, n) when is_binary(s) do
-    s
-    |> String.replace(~r/\s+/u, " ")
-    |> String.trim()
-    |> truncate(n)
-  end
-
-  defp oneline(other, n), do: oneline(inspect(other), n)
-
-  defp truncate(s, n) when byte_size(s) <= n, do: s
-  defp truncate(s, n), do: String.slice(s, 0, max(n - 1, 0)) <> "…"
+  # NB: the per-session union + summarization that used to live here moved to
+  # `SpellAgent.Tui.DataSource.Tools` (the read-only source tier the `.ptc`
+  # producer calls), so there is now ONE implementation shared by the data path
+  # and this Elixir floor — no drift. `sessions/1` above composes those two
+  # primitives exactly as `cockpit_sources.ptc` does.
 end

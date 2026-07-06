@@ -46,6 +46,7 @@ defmodule SpellAgent.Tui.DataSource.Tools do
   """
 
   alias SpellAgent.SessionRegistry
+  alias SpellAgent.Hist
   alias SpellAgent.Hist.Trace
 
   # Per-session span cap in a summary — a card is a glance, not a transcript
@@ -104,7 +105,7 @@ defmodule SpellAgent.Tui.DataSource.Tools do
     store = Map.get(ctx, :hist_store)
 
     %{
-      "session-registry/lineage" => fn _args -> lineage() end,
+      "session-registry/lineage" => fn _args -> lineage(store) end,
       "hist/trace-summary" => fn args -> trace_summary(store, args) end
     }
   end
@@ -133,23 +134,92 @@ defmodule SpellAgent.Tui.DataSource.Tools do
   # The live lineage rows, string-keyed for PTC. Best-effort: a down registry
   # yields []. Owner is stringified (`:human` / `{:session, parent}` -> "human" /
   # "session:parent") so the producer sees plain strings.
-  defp lineage do
-    SessionRegistry.lineage()
+  # The sessions the cockpit shows: the RECORDED set (newest-first, from the Hist
+  # store) UNIONED with the LIVE registry (owner/parent/region + running status).
+  # A finished mission stays visible (it is in the store) with its final status;
+  # a running one is enriched with lineage + a "running" status from the live
+  # registry. Keyed by session id; live lineage wins for the enrichment fields.
+  # Bounded to @max_lineage, newest first. Best-effort: a sick source -> [].
+  defp lineage(store) do
+    live_by_id =
+      SessionRegistry.lineage()
+      |> Map.new(fn row -> {Map.get(row, :session_id), row} end)
+
+    recorded = recorded_rows(store)
+
+    # Recorded sessions first (newest-first order preserved), then any LIVE
+    # session not yet flushed to the store (a just-spawned child). Dedup by id.
+    recorded_ids = MapSet.new(recorded, & &1["id"])
+
+    live_only =
+      live_by_id
+      |> Map.reject(fn {id, _} -> MapSet.member?(recorded_ids, id) end)
+      |> Enum.map(fn {_id, row} -> live_row(row) end)
+
+    (recorded ++ live_only)
+    |> Enum.map(fn row -> enrich(row, live_by_id) end)
     |> Enum.take(@max_lineage)
-    |> Enum.map(fn row ->
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
+  # The recorded sessions as cockpit rows (newest-first). `status` is derived per
+  # session below (from its trace); lineage fields come from meta when present.
+  defp recorded_rows(nil), do: []
+
+  defp recorded_rows(store) do
+    Hist.sessions(store: store)
+    |> Enum.map(fn s ->
+      meta = Map.get(s, :meta, %{}) || %{}
+
       %{
-        "id" => Map.get(row, :session_id),
-        "owner" => owner_string(Map.get(row, :owner)),
-        "parent-id" => Map.get(row, :parent_id),
-        "intent" => Map.get(row, :intent),
-        "region" => Map.get(row, :region),
-        "status" => status_string(Map.get(row, :status))
+        "id" => s.id,
+        "owner" => owner_string(Map.get(meta, :owner)),
+        "parent-id" => Map.get(meta, :parent_id),
+        "intent" => s.prompt,
+        "region" => Map.get(meta, :region),
+        "status" => nil
       }
     end)
   rescue
     _ -> []
   catch
     _, _ -> []
+  end
+
+  # A live registry entry as a cockpit row (a session not yet in the store).
+  defp live_row(row) do
+    %{
+      "id" => Map.get(row, :session_id),
+      "owner" => owner_string(Map.get(row, :owner)),
+      "parent-id" => Map.get(row, :parent_id),
+      "intent" => Map.get(row, :intent),
+      "region" => Map.get(row, :region),
+      "status" => "running"
+    }
+  end
+
+  # Enrich a row: a session that is LIVE right now takes its owner/parent/region
+  # from the live registry (fresher than the store meta) and is marked running.
+  defp enrich(row, live_by_id) do
+    case Map.get(live_by_id, row["id"]) do
+      nil ->
+        row
+
+      live ->
+        %{
+          row
+          | "owner" => owner_string(Map.get(live, :owner)),
+            "parent-id" => Map.get(live, :parent_id) || row["parent-id"],
+            "region" => Map.get(live, :region) || row["region"],
+            # The live registry's intent is fresher than the store prompt (which
+            # may be nil until the session flushes) — prefer it when present.
+            "intent" => Map.get(live, :intent) || row["intent"],
+            "status" => "running"
+        }
+    end
   end
 
   # ---- hist/trace-summary ----
@@ -173,13 +243,28 @@ defmodule SpellAgent.Tui.DataSource.Tools do
   defp safe_rows(store, id), do: Trace.rows(store, id)
 
   defp summarize(rows) when is_list(rows) do
+    running = running?(rows)
+
     %{
       "turns" => length(rows),
       "cost" => total_tokens(rows),
-      "running?" => running?(rows),
+      "running?" => running,
+      # The card's non-running badge reads `status`: derive the final outcome
+      # from the last recorded turn (ok/error), or "running" while in flight. This
+      # is what makes a FINISHED session show ✓/✗ instead of vanishing.
+      "status" => if(running, do: "running", else: final_status(rows)),
       "last" => last_activity(rows),
       "spans" => rows |> Enum.take(-@summary_turns) |> Enum.map(&span_row/1)
     }
+  end
+
+  defp final_status([]), do: "ok"
+
+  defp final_status(rows) do
+    case List.last(rows) do
+      %{status: s} when s in [:error, "error"] -> "error"
+      _ -> "ok"
+    end
   end
 
   defp unavailable do
@@ -236,10 +321,6 @@ defmodule SpellAgent.Tui.DataSource.Tools do
   defp owner_string({:session, p}) when is_binary(p), do: "session:" <> p
   defp owner_string(nil), do: "human"
   defp owner_string(other), do: inspect(other)
-
-  defp status_string(s) when is_atom(s) and not is_nil(s), do: Atom.to_string(s)
-  defp status_string(s) when is_binary(s), do: s
-  defp status_string(_), do: "running"
 
   defp span_status(s) when s in [:ok, "ok"], do: "ok"
   defp span_status(s) when s in [:error, "error"], do: "error"

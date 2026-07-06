@@ -26,7 +26,7 @@
      "children"
      [;; ── header strip: session count + running count ──
       {"type" "paragraph"
-       "text" ~(str (count data/sessions) " sessions \u00b7 "
+       "text" ~(str (count data/sessions) " sessions · "
                     (count (filter (fn [s] (get s "running?")) data/sessions))
                     " running")
        "style" {"fg" "cyan"}}
@@ -38,26 +38,30 @@
        "children"
        ~@(map
            (fn [s]
-             {"type" "block"
-              "title" (str " " (get s "id") "  "
-                           (if (get s "running?")
-                               (str "\u25cf" (get s "turns") "t")
-                               (get s "status")))
-              "borders" ["all"]
-              "border_type" "rounded"
-              "border_style" {"fg" (cond (= (get s "status") "error") "red"
-                                         (get s "running?")          "yellow"
-                                         :else                       "green")}
-              "children"
-              [{"type" "list"
-                "items"
-                (concat
-                  [(str (if (= (get s "owner") "human") "\u2302 " "\u21b7 ") (get s "intent"))
-                   (str "\u21b7 " (get s "last"))]
-                  (map (fn [sp]
-                         (str (cond (= (get sp "status") "ok")    "\u2713 "
-                                    (= (get sp "status") "error") "\u2717 "
-                                    :else                          "\u00b7 ")
-                              (get sp "title")))
-                       (get s "spans")))}]})
+             ;; A card is a `list` widget WRAPPED in a `block` (border+title) via
+             ;; its `block` field — the same pattern the composer/history panes
+             ;; use. (A bare `block` with `children` renders only the border; the
+             ;; widget must carry its own `block` field for the border to wrap it.)
+             {"type" "list"
+              "items"
+              (concat
+                [(str (if (= (get s "owner") "human") "⌂ " "⤷ ") (get s "intent"))
+                 (str "⤷ " (get s "last"))]
+                (map (fn [sp]
+                       (str (cond (= (get sp "status") "ok")    "✓ "
+                                  (= (get sp "status") "error") "✗ "
+                                  :else                          "· ")
+                            (get sp "title")))
+                     (get s "spans")))
+              "block"
+              {"type" "block"
+               "title" (str " " (get s "id") "  "
+                            (if (get s "running?")
+                                (str "●" (get s "turns") "t")
+                                (get s "status")))
+               "borders" ["all"]
+               "border_type" "rounded"
+               "border_style" {"fg" (cond (= (get s "status") "error") "red"
+                                          (get s "running?")          "yellow"
+                                          :else                       "green")}}})
            data/sessions)}]})})
