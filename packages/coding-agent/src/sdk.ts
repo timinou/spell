@@ -20,7 +20,13 @@ import { loadCapability } from "./capability";
 import { type ModeConfig, modeConfigCapability, type ResolvedModeConfig } from "./capability/mode";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
-import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
+import {
+	defaultModelPerProvider,
+	formatModelString,
+	parseModelPattern,
+	parseModelString,
+	resolveModelRoleValue,
+} from "./config/model-resolver";
 import {
 	loadPromptTemplates as loadPromptTemplatesInternal,
 	type PromptTemplate,
@@ -1293,10 +1299,30 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Skip fallback if the user explicitly requested a model via --model that wasn't found.
 	if (!model && !options.modelPattern) {
 		const allModels = modelRegistry.getAll();
-		for (const candidate of allModels) {
+		// Prefer each provider's curated default model over raw registry order.
+		// The built-in list is not quality-ordered — its head for a provider can be
+		// a long-dead model (e.g. anthropic's list starts at claude-3-5-sonnet-20240620,
+		// which 404s on current accounts). Blindly taking the first keyed model there
+		// silently routes work onto a fossil. `defaultModelPerProvider` is the curated,
+		// currently-served pick per provider, so try those first.
+		const defaultModelCandidates: Model[] = [];
+		for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
+			const match = allModels.find(m => m.provider === provider && m.id === defaultId);
+			if (match) defaultModelCandidates.push(match);
+		}
+		for (const candidate of defaultModelCandidates) {
 			if (await hasModelApiKey(candidate)) {
 				model = candidate;
 				break;
+			}
+		}
+		// No curated default was authenticated — fall back to first keyed model.
+		if (!model) {
+			for (const candidate of allModels) {
+				if (await hasModelApiKey(candidate)) {
+					model = candidate;
+					break;
+				}
 			}
 		}
 		if (model) {

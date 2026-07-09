@@ -958,6 +958,13 @@ export class MCPManager {
 			try {
 				let credential = this.#authStorage.get(credentialId);
 				if (credential?.type === "oauth") {
+					// client_id/client_secret: prefer the credential row in agent.db (set at
+					// login time, including DCR-issued values — BUG-492) over the config's auth
+					// block, which only ever carries clientId (never the secret, post-BUG-492
+					// follow-up) and exists mainly for legacy/manually-configured servers.
+					const effectiveClientId = credential.clientId ?? auth.clientId;
+					const effectiveClientSecret = credential.clientSecret ?? auth.clientSecret;
+
 					// Proactive refresh: 5-minute buffer before expiry
 					// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
 					const REFRESH_BUFFER_MS = 5 * 60_000;
@@ -968,10 +975,19 @@ export class MCPManager {
 							const refreshed = await refreshMCPOAuthToken(
 								auth.tokenUrl,
 								credential.refresh,
-								auth.clientId,
-								auth.clientSecret,
+								effectiveClientId,
+								effectiveClientSecret,
 							);
-							const refreshedCredential = { type: "oauth" as const, ...refreshed };
+							// Carry the client_id/client_secret forward onto the refreshed row so the
+							// NEXT refresh also has them (refreshMCPOAuthToken's response never echoes
+							// them back — they're the credential the client authenticated WITH, not
+							// part of the token response).
+							const refreshedCredential = {
+								type: "oauth" as const,
+								...refreshed,
+								clientId: effectiveClientId,
+								clientSecret: effectiveClientSecret,
+							};
 							await this.#authStorage.set(credentialId, refreshedCredential);
 							credential = refreshedCredential;
 						} catch (refreshError) {

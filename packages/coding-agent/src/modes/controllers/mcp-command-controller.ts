@@ -8,12 +8,6 @@ import { getMCPConfigPath, getProjectDir } from "@spell/pi-utils";
 import type { SourceMeta } from "../../capability/types";
 import type { McpServerKdlEntry } from "../../config/kdl-compatibility";
 import { settings, type WriteTier } from "../../config/settings";
-import {
-	configToEntry,
-	entryToConfig,
-	resolveMcpServer,
-	type TierServerMap,
-} from "../../mcp/kdl-server-resolver";
 import { analyzeAuthError, discoverOAuthEndpoints, MCPManager } from "../../mcp";
 import { connectToServer, disconnectServer, listTools } from "../../mcp/client";
 import {
@@ -23,6 +17,7 @@ import {
 	removeMCPServer,
 	setServerDisabled,
 } from "../../mcp/config-writer";
+import { configToEntry, entryToConfig, resolveMcpServer, type TierServerMap } from "../../mcp/kdl-server-resolver";
 import { MCPOAuthFlow } from "../../mcp/oauth-flow";
 import {
 	clearSmitheryApiKey,
@@ -411,7 +406,7 @@ export class MCPCommandController {
 						}
 
 						try {
-							const credentialId = await this.#handleOAuthFlow(
+							const oauthResult = await this.#handleOAuthFlow(
 								oauth.authorizationUrl,
 								oauth.tokenUrl,
 								oauth.clientId ?? finalConfig.oauth?.clientId ?? "",
@@ -423,10 +418,11 @@ export class MCPCommandController {
 								...finalConfig,
 								auth: {
 									type: "oauth",
-									credentialId,
+									credentialId: oauthResult.credentialId,
 									tokenUrl: oauth.tokenUrl,
-									clientId: oauth.clientId ?? finalConfig.oauth?.clientId,
-									clientSecret: undefined,
+									clientId: oauthResult.clientId ?? oauth.clientId ?? finalConfig.oauth?.clientId,
+									// client_secret intentionally omitted: stored in agent.db by
+									// #handleOAuthFlow, never persisted into spell.kdl (BUG-492 follow-up).
 								},
 							};
 						} catch (oauthError) {
@@ -489,7 +485,7 @@ export class MCPCommandController {
 		clientSecret: string,
 		scopes: string,
 		callbackPort?: number,
-	): Promise<string> {
+	): Promise<{ credentialId: string; clientId?: string }> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		let parsedAuthUrl: URL;
 
@@ -589,16 +585,30 @@ export class MCPCommandController {
 			// Generate a unique credential ID
 			const credentialId = `mcp_oauth_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
-			// Store credentials in auth storage
+			// Client id/secret the flow actually used to obtain tokens. For providers requiring
+			// Dynamic Client Registration (RFC 7591, e.g. Notion), this is the value DCR issued,
+			// NOT the (often undefined) `clientId` argument passed in from server-metadata
+			// discovery. Refresh later must replay the exact id/secret pair the token was
+			// issued under — see BUG-492.
+			const resolvedFlowClientId = flow.resolvedClientId;
+			const resolvedFlowClientSecret = clientSecret || flow.registeredClientSecret;
+
+			// Store credentials in auth storage. client_secret is credential material, not
+			// config — it lives in agent.db (0600, keyed by credentialId) alongside the
+			// access/refresh tokens it's paired with, never in the project's spell.kdl.
 			const oauthCredential: OAuthCredential = {
 				type: "oauth",
 				...credentials,
+				clientId: resolvedFlowClientId,
+				clientSecret: resolvedFlowClientSecret,
 			};
 
 			// Store under a synthetic provider name
 			await authStorage.set(credentialId, oauthCredential);
 
-			return credentialId;
+			// clientId (not the secret) is a public OAuth identifier, safe to persist in
+			// spell.kdl alongside tokenUrl/credentialId for display + refresh fallback.
+			return { credentialId, clientId: resolvedFlowClientId };
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
 
@@ -1359,14 +1369,18 @@ export class MCPCommandController {
 			}
 
 			// Already authenticated? No-op with a friendly message.
-			const currentAuth = (found.config as MCPServerConfig & { auth?: { type?: string; credentialId?: string } }).auth;
+			const currentAuth = (found.config as MCPServerConfig & { auth?: { type?: string; credentialId?: string } })
+				.auth;
 			if (currentAuth?.type === "oauth" && currentAuth.credentialId) {
 				const existing = this.ctx.session.modelRegistry.authStorage.get(currentAuth.credentialId);
 				if (existing?.type === "oauth") {
 					this.#showMessage(
 						[
 							"",
-							theme.fg("muted", `Server "${name}" is already authenticated. Use /mcp reauth ${name} to re-run OAuth.`),
+							theme.fg(
+								"muted",
+								`Server "${name}" is already authenticated. Use /mcp reauth ${name} to re-run OAuth.`,
+							),
 							"",
 						].join("\n"),
 					);
@@ -1379,11 +1393,18 @@ export class MCPCommandController {
 
 			this.#showMessage(["", theme.fg("muted", `Authenticating "${name}"...`), ""].join("\n"));
 
-			const credentialId = await this.#handleOAuthFlow(
+			// Legacy fallback: a pre-BUG-492 spell.kdl may still carry a manually-configured
+			// client_secret in the auth block. Newer configs never do (it lives in agent.db),
+			// but honor it here if present so first-time login for a hand-configured
+			// confidential client still works.
+			const legacyClientSecret =
+				(found.config as MCPServerConfig & { auth?: { clientSecret?: string } }).auth?.clientSecret ?? "";
+
+			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
 				oauth.clientId ?? found.config.oauth?.clientId ?? "",
-				"",
+				legacyClientSecret,
 				oauth.scopes ?? "",
 				found.config.oauth?.callbackPort,
 			);
@@ -1392,9 +1413,11 @@ export class MCPCommandController {
 				...baseConfig,
 				auth: {
 					type: "oauth",
-					credentialId,
+					credentialId: oauthResult.credentialId,
 					tokenUrl: oauth.tokenUrl,
-					clientId: oauth.clientId ?? found.config.oauth?.clientId,
+					clientId: oauthResult.clientId ?? oauth.clientId ?? found.config.oauth?.clientId,
+					// client_secret intentionally omitted: stored in agent.db by #handleOAuthFlow,
+					// never persisted into spell.kdl (BUG-492 follow-up).
 				},
 			};
 			await this.#persistServer(name, found.scope, updated);
@@ -1444,6 +1467,19 @@ export class MCPCommandController {
 					auth?: { type: "oauth" | "apikey"; credentialId?: string; clientSecret?: string };
 				}
 			).auth;
+
+			// Read the current client_secret BEFORE removing the credential: for newer
+			// (post-BUG-492) configs it lives in agent.db keyed by credentialId, not in
+			// spell.kdl, and #removeManagedOAuthCredential deletes that row. Legacy configs
+			// may still carry it directly on the kdl auth block — check both.
+			let legacyClientSecret = currentAuth?.clientSecret ?? "";
+			if (currentAuth?.type === "oauth" && currentAuth.credentialId) {
+				const existingCredential = this.ctx.session.modelRegistry.authStorage.get(currentAuth.credentialId);
+				if (existingCredential?.type === "oauth" && existingCredential.clientSecret) {
+					legacyClientSecret = existingCredential.clientSecret;
+				}
+			}
+
 			if (currentAuth?.type === "oauth") {
 				await this.#removeManagedOAuthCredential(currentAuth.credentialId);
 			}
@@ -1453,11 +1489,11 @@ export class MCPCommandController {
 
 			this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 
-			const credentialId = await this.#handleOAuthFlow(
+			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
 				oauth.clientId ?? found.config.oauth?.clientId ?? "",
-				"",
+				legacyClientSecret,
 				oauth.scopes ?? "",
 				found.config.oauth?.callbackPort,
 			);
@@ -1466,10 +1502,11 @@ export class MCPCommandController {
 				...baseConfig,
 				auth: {
 					type: "oauth",
-					credentialId,
+					credentialId: oauthResult.credentialId,
 					tokenUrl: oauth.tokenUrl,
-					clientId: oauth.clientId ?? found.config.oauth?.clientId,
-					clientSecret: currentAuth?.clientSecret,
+					clientId: oauthResult.clientId ?? oauth.clientId ?? found.config.oauth?.clientId,
+					// client_secret intentionally omitted: stored in agent.db by #handleOAuthFlow,
+					// never persisted into spell.kdl (BUG-492 follow-up).
 				},
 			};
 			await this.#persistServer(name, found.scope, updated);

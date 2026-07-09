@@ -6,6 +6,17 @@ export type OAuthCredentials = {
 	projectId?: string;
 	email?: string;
 	accountId?: string;
+	/**
+	 * OAuth client_id this credential was issued/refreshed under. Required alongside
+	 * `clientSecret` for providers using Dynamic Client Registration (RFC 7591, e.g.
+	 * Notion's MCP server) where the client_id is generated per-registration rather
+	 * than being a fixed, publicly known value — refresh calls must replay the exact
+	 * id/secret pair the token was issued under. Stored alongside the token in
+	 * agent.db (NOT in spell.kdl) since it is credential material, not config.
+	 */
+	clientId?: string;
+	/** OAuth client_secret paired with `clientId`, when the provider's DCR response included one. */
+	clientSecret?: string;
 };
 
 export type OAuthProvider =

@@ -80,6 +80,24 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		return { url: authUrl.toString() };
 	}
 
+	/**
+	 * Client id resolved for this flow: explicit config value, one parsed out of the
+	 * authorization URL, or (for DCR-only providers like Notion) the client_id issued by
+	 * dynamic client registration. `undefined` only when none of these applied.
+	 */
+	get resolvedClientId(): string | undefined {
+		return this.#resolvedClientId;
+	}
+
+	/**
+	 * Client secret issued by dynamic client registration (RFC 7591), when the provider's
+	 * registration endpoint returned one. `undefined` for public/PKCE-only clients and for
+	 * providers that were pre-configured with `config.clientSecret`.
+	 */
+	get registeredClientSecret(): string | undefined {
+		return this.#registeredClientSecret;
+	}
+
 	async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
 		const params = new URLSearchParams({
 			grant_type: "authorization_code",

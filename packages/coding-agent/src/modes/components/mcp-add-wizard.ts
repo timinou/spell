@@ -3,16 +3,7 @@
  *
  * Interactive multi-step wizard for adding MCP servers.
  */
-import {
-	Container,
-	Input,
-	matchesKey,
-	replaceTabs,
-	Spacer,
-	Text,
-	TruncatedText,
-	truncateToWidth,
-} from "@spell/pi-tui";
+import { Container, Input, matchesKey, replaceTabs, Spacer, Text, TruncatedText, truncateToWidth } from "@spell/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@spell/pi-utils";
 import { validateServerName } from "../../mcp/config-writer";
 import { analyzeAuthError, discoverOAuthEndpoints } from "../../mcp/oauth-discovery";
@@ -103,7 +94,13 @@ export class MCPAddWizard extends Container {
 	#onCompleteCallback: (name: string, config: MCPServerConfig, scope: Scope) => void;
 	#onCancelCallback: () => void;
 	#onOAuthCallback:
-		| ((authUrl: string, tokenUrl: string, clientId: string, clientSecret: string, scopes: string) => Promise<string>)
+		| ((
+				authUrl: string,
+				tokenUrl: string,
+				clientId: string,
+				clientSecret: string,
+				scopes: string,
+		  ) => Promise<{ credentialId: string; clientId?: string }>)
 		| null = null;
 	#onTestConnectionCallback: ((config: MCPServerConfig) => Promise<void>) | null = null;
 	#onRenderCallback: (() => void) | null = null;
@@ -117,7 +114,7 @@ export class MCPAddWizard extends Container {
 			clientId: string,
 			clientSecret: string,
 			scopes: string,
-		) => Promise<string>,
+		) => Promise<{ credentialId: string; clientId?: string }>,
 		onTestConnection?: (config: MCPServerConfig) => Promise<void>,
 		onRender?: () => void,
 		initialName?: string,
@@ -1032,7 +1029,8 @@ export class MCPAddWizard extends Container {
 					credentialId: this.#state.oauthCredentialId,
 					tokenUrl: this.#state.oauthTokenUrl || undefined,
 					clientId: this.#state.oauthClientId || undefined,
-					clientSecret: this.#state.oauthClientSecret || undefined,
+					// client_secret intentionally omitted: stored in agent.db by the OAuth handler,
+					// never persisted into spell.kdl (BUG-492 follow-up).
 				};
 			}
 
@@ -1059,7 +1057,8 @@ export class MCPAddWizard extends Container {
 				credentialId: this.#state.oauthCredentialId,
 				tokenUrl: this.#state.oauthTokenUrl || undefined,
 				clientId: this.#state.oauthClientId || undefined,
-				clientSecret: this.#state.oauthClientSecret || undefined,
+				// client_secret intentionally omitted: stored in agent.db by the OAuth handler,
+				// never persisted into spell.kdl (BUG-492 follow-up).
 			};
 		}
 
@@ -1119,7 +1118,7 @@ export class MCPAddWizard extends Container {
 
 		try {
 			// Call OAuth handler
-			const credentialId = await this.#onOAuthCallback(
+			const oauthResult = await this.#onOAuthCallback(
 				this.#state.oauthAuthUrl,
 				this.#state.oauthTokenUrl,
 				this.#state.oauthClientId,
@@ -1127,8 +1126,15 @@ export class MCPAddWizard extends Container {
 				this.#state.oauthScopes,
 			);
 
-			// Store credential ID
-			this.#state.oauthCredentialId = credentialId;
+			// Store credential ID, and widen client id to whatever the flow actually resolved
+			// to (Dynamic Client Registration providers, e.g. Notion, mint their own — see
+			// BUG-492) so the persisted config carries the value refresh needs later. The
+			// client_secret is credential material, not config: it's stored in agent.db
+			// alongside the tokens by #onOAuthCallback and never returned here, so we clear
+			// any manually-typed value from wizard state to avoid it leaking into spell.kdl.
+			this.#state.oauthCredentialId = oauthResult.credentialId;
+			if (oauthResult.clientId) this.#state.oauthClientId = oauthResult.clientId;
+			this.#state.oauthClientSecret = "";
 
 			// Show success message
 			this.#contentContainer.clear();
@@ -1258,7 +1264,8 @@ export class MCPAddWizard extends Container {
 					credentialId: this.#state.oauthCredentialId,
 					tokenUrl: this.#state.oauthTokenUrl || undefined,
 					clientId: this.#state.oauthClientId || undefined,
-					clientSecret: this.#state.oauthClientSecret || undefined,
+					// client_secret intentionally omitted: stored in agent.db by the OAuth handler,
+					// never persisted into spell.kdl (BUG-492 follow-up).
 				};
 			}
 
@@ -1286,7 +1293,8 @@ export class MCPAddWizard extends Container {
 				credentialId: this.#state.oauthCredentialId,
 				tokenUrl: this.#state.oauthTokenUrl || undefined,
 				clientId: this.#state.oauthClientId || undefined,
-				clientSecret: this.#state.oauthClientSecret || undefined,
+				// client_secret intentionally omitted: stored in agent.db by the OAuth handler,
+				// never persisted into spell.kdl (BUG-492 follow-up).
 			};
 		}
 
