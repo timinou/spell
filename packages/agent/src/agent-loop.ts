@@ -274,14 +274,7 @@ async function runLoop(
 			const eagerDispatch: EagerDispatchMap = new Map();
 
 			// Stream assistant response
-			const message = await streamAssistantResponse(
-				currentContext,
-				config,
-				signal,
-				stream,
-				streamFn,
-				eagerDispatch,
-			);
+			const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn, eagerDispatch);
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -327,6 +320,19 @@ async function runLoop(
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
+				}
+
+				// Structural halt (haltsLoop:true on a tool result, e.g. an accepted
+				// terminal submit_result): stop scheduling further turns SYNCHRONOUSLY,
+				// in the same tick that decided hasMoreToolCalls, rather than relying on
+				// an async abort signal to be observed before the next iteration starts.
+				// This is what makes "the model regains a turn after this call"
+				// inexpressible instead of merely raced-against.
+				if (toolExecution.haltsLoop) {
+					stream.push({ type: "turn_end", message, toolResults });
+					stream.push({ type: "agent_end", messages: newMessages });
+					stream.end(newMessages);
+					return;
 				}
 			}
 
@@ -399,9 +405,7 @@ async function streamAssistantResponse(
 	// cancellation. Compose with the caller's signal so either source aborts the
 	// upstream stream.
 	const barrierAbort = new AbortController();
-	const providerSignal = signal
-		? AbortSignal.any([signal, barrierAbort.signal])
-		: barrierAbort.signal;
+	const providerSignal = signal ? AbortSignal.any([signal, barrierAbort.signal]) : barrierAbort.signal;
 	const barrierEnabled = (config.sequentialToolStreamBarrier ?? "enforce") === "enforce";
 
 	const response = await streamFunction(config.model, llmContext, {
@@ -491,8 +495,7 @@ async function streamAssistantResponse(
 					// to the barrier branch below and never reach this path. Unknown
 					// tools (not in context.tools) fail open here — their error result
 					// is produced post-stream by `executeToolCalls`.
-					const earlyDispatchEnabled =
-						(config.earlyDispatchParallelTools ?? "enforce") === "enforce";
+					const earlyDispatchEnabled = (config.earlyDispatchParallelTools ?? "enforce") === "enforce";
 					if (earlyDispatchEnabled && eagerDispatch) {
 						const tool = context.tools?.find(t => t.name === event.toolCall.name);
 						if (tool && tool.executionMode !== "sequential" && !eagerDispatch.has(event.toolCall.id)) {
@@ -539,7 +542,7 @@ async function streamAssistantResponse(
 												index: 0,
 												total: 1,
 												toolCalls: [{ id: event.toolCall.id, name: event.toolCall.name }],
-										})
+											})
 										: undefined;
 									const result = await tool.execute(
 										event.toolCall.id,
@@ -659,7 +662,7 @@ async function executeToolCalls(
 	intentTracing?: AgentLoopConfig["intentTracing"],
 	resolveUnknownTool?: AgentLoopConfig["resolveUnknownTool"],
 	eagerDispatch?: EagerDispatchMap,
-): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
+): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[]; haltsLoop: boolean }> {
 	type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 	const toolCalls = assistantMessage.content.filter((c): c is ToolCallContent => c.type === "toolCall");
 	const emittedToolResults: ToolResultMessage[] = [];
@@ -747,6 +750,7 @@ async function executeToolCalls(
 			details: result.details,
 			isError,
 			timestamp: Date.now(),
+			haltsLoop: result.haltsLoop,
 		};
 		record.result = result;
 		record.isError = isError;
@@ -899,7 +903,12 @@ async function executeToolCalls(
 		}
 	}
 
-	return { toolResults: emittedToolResults, steeringMessages };
+	// A single haltsLoop:true result in the batch is enough to stop the loop —
+	// there is no meaningful "partial halt" (the model cannot be re-prompted for
+	// only some of a batch), so any() is the correct aggregation.
+	const haltsLoop = emittedToolResults.some(r => r.haltsLoop === true);
+
+	return { toolResults: emittedToolResults, steeringMessages, haltsLoop };
 }
 
 function createSkippedToolResult(): AgentToolResult<any> {

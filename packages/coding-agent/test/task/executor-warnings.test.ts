@@ -13,7 +13,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: [{ status: "success" }],
+			submitResultTerminal: { status: "success" },
 			outputSchema: undefined,
 		});
 
@@ -28,7 +28,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			submitResultTerminal: undefined,
 			outputSchema: { properties: { ok: { type: "boolean" } } },
 		});
 
@@ -43,7 +43,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			submitResultTerminal: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
@@ -58,7 +58,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			submitResultTerminal: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
@@ -74,7 +74,7 @@ describe("subagent warning injection", () => {
 			stderr: "subagent terminated",
 			doneAborted: true,
 			signalAborted: false,
-			submitResultItems: undefined,
+			submitResultTerminal: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
@@ -90,7 +90,7 @@ describe("subagent warning injection", () => {
 			stderr: "401 Invalid bearer token",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			submitResultTerminal: undefined,
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
@@ -106,7 +106,7 @@ describe("subagent warning injection", () => {
 			stderr: "old error",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: [{ status: "aborted", error: "blocked by permissions" }],
+			submitResultTerminal: { status: "aborted", error: "blocked by permissions" },
 			outputSchema: undefined,
 		});
 
@@ -124,7 +124,7 @@ describe("subagent warning injection", () => {
 			stderr: "should clear",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: [{ status: "success", data: { ok: true } }],
+			submitResultTerminal: { status: "success", data: { ok: true } },
 			outputSchema: undefined,
 		});
 
@@ -141,7 +141,7 @@ describe("subagent warning injection", () => {
 			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
-			submitResultItems: undefined,
+			submitResultTerminal: undefined,
 			outputSchema: undefined,
 		});
 

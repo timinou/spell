@@ -35,8 +35,8 @@ import { buildNamedToolChoice } from "../utils/tool-choice";
 import "./subprocess-execution-handlers";
 import { makeAskOrchestratorTool } from "./ask-tools";
 import { type ExecutionRecord, type GateFailure, verifyGates } from "./gate-verification";
-import { gatherSubprocessExecutions } from "./subprocess-execution-handlers";
 import { createProgressHeartbeat } from "./progress-heartbeat";
+import { gatherSubprocessExecutions } from "./subprocess-execution-handlers";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -308,6 +308,10 @@ export interface SubmitResultItem {
 	gateAccepted?: boolean;
 	/** Gate verification failures recorded when gateAccepted === false. */
 	gateFailures?: GateFailure[];
+	/** PLAN-350 S3: mirrors submit_result's keep_going field. true ⇒ this item is a
+	 * checkpoint (belongs in progress.checkpoints); false/absent ⇒ this item is a
+	 * candidate terminal result. */
+	keepGoing?: boolean;
 }
 
 interface FinalizeSubprocessOutputArgs {
@@ -316,7 +320,11 @@ interface FinalizeSubprocessOutputArgs {
 	stderr: string;
 	doneAborted: boolean;
 	signalAborted: boolean;
-	submitResultItems?: SubmitResultItem[];
+	/** PLAN-350 S3: the resolved single-assignment terminal item, or undefined if
+	 * none ever resolved (never "the last array entry" — that was the exact bug:
+	 * a real terminal report silently buried under hundreds of subsequent
+	 * checkpoint/spam calls that happened to land later in the array). */
+	submitResultTerminal?: SubmitResultItem;
 	reportFindings?: ReviewFinding[];
 	outputSchema: unknown;
 }
@@ -394,6 +402,96 @@ function hasRuntimeVerification(opts: RuntimeVerificationOptions | undefined): b
 	return Boolean(opts?.gateCmd || opts?.gateCommit || opts?.gateArtifact);
 }
 
+/**
+ * PLAN-350 S5: checkpoint-stream anomaly heuristic. Derived directly from the
+ * prevalence audit's observed subtypes (13 real degenerate incidents, all
+ * verified by direct payload sampling — see PLAN-350 evidence trail), not
+ * speculative pattern-matching:
+ *   1. incrementing-counter spam — payload reduces to the same "shape" once
+ *      trailing digits/letters are stripped (`{"a1":true}`, `{"a2":true}`, ...
+ *      `{"dd":100}`, `{"marker":"final-97"}`, `{"marker":"TRUE_STOP5"}`, ...)
+ *   2. verbatim-repeat — byte-identical payload resent unchanged (DockData:
+ *      174/191 calls identical; WebhookSecrets: 282/291 identical)
+ * These OR together (checked per-adjacent-pair) because a single real incident
+ * can drift between both within itself (DockData mixed both patterns).
+ * Deliberately does NOT distinguish `data` vs `error` — a subagent spamming
+ * `keep_going:true` with incrementing `error` strings (w6SubstrateAdoption:
+ * `{"error":"gq"}`→`{"error":"yc"}`) is the same failure shape as spamming `data`.
+ */
+const TRIVIAL_VALUE_MAX_CHARS = 24;
+
+/** A JSON-primitive short enough that no legitimate substantive report would
+ * consist of it alone — the audit's real multi-call legitimate bucket (2-8
+ * calls) always carried a schema-error message or real content, never a bare
+ * boolean/short string/small number as the entire payload. */
+function isTrivialPrimitive(value: unknown): boolean {
+	if (typeof value === "boolean" || value === null) return true;
+	if (typeof value === "number") return true;
+	if (typeof value === "string") return value.length <= TRIVIAL_VALUE_MAX_CHARS;
+	return false;
+}
+
+/** True when `value` is an object with 1-2 top-level keys, all of whose values
+ * are trivial primitives — the structural shape shared by every observed
+ * incrementing-counter incident (`{"a1":true}`, `{"dd":100}`,
+ * `{"marker":"final-97"}`, `{"ah":31}`) regardless of exact key spelling. */
+function isTrivialObjectShape(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const entries = Object.entries(value as Record<string, unknown>);
+	if (entries.length === 0 || entries.length > 2) return false;
+	return entries.every(([, v]) => isTrivialPrimitive(v));
+}
+
+function checkpointShapeFingerprint(value: unknown): string {
+	let serialized: string;
+	try {
+		serialized = JSON.stringify(value) ?? "null";
+	} catch {
+		serialized = String(value);
+	}
+	// Strip digit runs so "a1"/"a2"/"dd100" and "final-97"/"TRUE_STOP5" collapse
+	// to the same shape while genuinely different content does not.
+	const digitsStripped = serialized.replace(/[0-9]+/g, "#");
+	// Any object matching the "trivial 1-2 key, trivial values" shape collapses to
+	// ONE canonical bucket regardless of exact key spelling ("ah"/"ai"/"aj",
+	// "vv1"/"ww1") — catches pure key-rotation spam that carries no digits to
+	// strip at all. Real substantive payloads (nested objects, arrays, long
+	// strings, 3+ keys) never match this bucket, so this cannot false-positive
+	// against legitimate multi-checkpoint content.
+	if (isTrivialObjectShape(value)) return "__trivial_object_shape__";
+	// A bare trivial primitive with NO digits at all (w6SubstrateAdoption's
+	// {"error":"gq"}→{"error":"yc"} 2-char rotating codes — digit-stripping alone
+	// misses this, since there's nothing numeric to collapse) also buckets
+	// canonically. A real error message long/substantive enough to be genuine
+	// (>24 chars, per isTrivialPrimitive) never matches.
+	if (isTrivialPrimitive(value)) return "__trivial_primitive_shape__";
+	return digitsStripped;
+}
+
+function isCheckpointSpamPattern(checkpoints: Array<{ data?: unknown; error?: string }>, windowSize: number): boolean {
+	if (checkpoints.length < windowSize) return false;
+	const recent = checkpoints.slice(-windowSize);
+	// Fingerprint on the ACTUAL content (data, or error as a fallback) — not a
+	// {data:...}/{error:...} wrapper, which would hide a trivial inner shape
+	// (e.g. {ah:31} vs {ai:32}) behind an always-identical single-key wrapper
+	// object and prevent isTrivialObjectShape from ever matching the real payload.
+	const contents = recent.map(c => (c.error !== undefined ? c.error : c.data));
+	const serializedAll = contents.map(v => {
+		try {
+			return JSON.stringify(v) ?? "null";
+		} catch {
+			return String(v);
+		}
+	});
+	// Verbatim-repeat: every checkpoint in the window is byte-identical.
+	if (serializedAll.every(s => s === serializedAll[0])) return true;
+	// Incrementing-counter / key-rotation spam: every checkpoint in the window
+	// reduces to the same shape fingerprint once counters/suffixes are stripped,
+	// or all match the "trivial 1-2 key" bucket regardless of exact key spelling.
+	const fingerprints = contents.map(checkpointShapeFingerprint);
+	return fingerprints.every(f => f === fingerprints[0]);
+}
+
 function formatGateFailures(failures: GateFailure[]): string[] {
 	return failures.map(
 		failure => `- ${failure.gate} not satisfied: expected \`${failure.expected}\`; ${failure.detail}`,
@@ -409,23 +507,26 @@ function buildMissingVerificationProofMessage(failures: GateFailure[]): string {
 
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
-	const { submitResultItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
+	const { submitResultTerminal, reportFindings, doneAborted, signalAborted, outputSchema } = args;
 	let abortedViaSubmitResult = false;
-	const hasSubmitResult = Array.isArray(submitResultItems) && submitResultItems.length > 0;
+	// PLAN-350 S3: presence of a RESOLVED terminal cell, not "array has any
+	// entries" — a subagent that only ever checkpointed (or spammed) without
+	// resolving falls through to the fallback-completion path below, exactly like
+	// a subagent that never called submit_result at all.
+	const hasSubmitResult = submitResultTerminal !== undefined;
 
 	if (hasSubmitResult) {
-		const lastSubmitResult = submitResultItems[submitResultItems.length - 1];
-		if (lastSubmitResult?.status === "aborted") {
+		if (submitResultTerminal.status === "aborted") {
 			abortedViaSubmitResult = true;
 			exitCode = 0;
-			stderr = lastSubmitResult.error || "Subagent aborted task";
+			stderr = submitResultTerminal.error || "Subagent aborted task";
 			try {
-				rawOutput = JSON.stringify({ aborted: true, error: lastSubmitResult.error }, null, 2);
+				rawOutput = JSON.stringify({ aborted: true, error: submitResultTerminal.error }, null, 2);
 			} catch {
-				rawOutput = `{"aborted":true,"error":"${lastSubmitResult.error || "Unknown error"}"}`;
+				rawOutput = `{"aborted":true,"error":"${submitResultTerminal.error || "Unknown error"}"}`;
 			}
 		} else {
-			const submitData = lastSubmitResult?.data;
+			const submitData = submitResultTerminal.data;
 			if (submitData === null || submitData === undefined) {
 				rawOutput = prependSubagentWarning(rawOutput, SUBAGENT_WARNING_NULL_SUBMIT_RESULT);
 			} else {
@@ -436,11 +537,11 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 					const errorMessage = err instanceof Error ? err.message : String(err);
 					rawOutput = `{"error":"Failed to serialize submit_result data: ${errorMessage}"}`;
 				}
-				if (lastSubmitResult?.gateAccepted === false) {
+				if (submitResultTerminal.gateAccepted === false) {
 					// BUG-354: keep structuredResult accessible (rawOutput already serialized) but mark
 					// the run as gate-failed via non-zero exitCode and a clear stderr message.
 					if (exitCode === 0) exitCode = 1;
-					stderr = buildMissingVerificationProofMessage(lastSubmitResult.gateFailures ?? []);
+					stderr = buildMissingVerificationProofMessage(submitResultTerminal.gateFailures ?? []);
 				} else {
 					exitCode = 0;
 					stderr = "";
@@ -804,10 +905,41 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
 	let unsubscribe: (() => void) | null = null;
-	let submitResultCalled = false;
-	// BUG-356: latched on submit_result success → blocks the agent loop from issuing further
-	// reminder/retry prompts even when async event ordering races the abort signal.
-	let terminating = false;
+
+	// PLAN-350 S1: single lifecycle authority replacing the old scattered-boolean
+	// state (terminating / submitResultCalled / abortSignal.aborted / abortReason,
+	// each read at different sites with no shared source of truth — the exact
+	// shape a prior fix attempt, BUG-356, already tried and that still let a
+	// subagent spin ~700 times post-acceptance). "closed" is checked synchronously
+	// before any further prompt/reminder is issued — see the retry loops below.
+	type SubagentLifecycle = "running" | "closing" | "closed";
+	let lifecycle: SubagentLifecycle = "running";
+
+	// PLAN-350 S3: split store. `checkpoints` is genuinely multi-valued (every
+	// keep_going:true submit_result call) — no invariant violated, nothing here
+	// was ever pretending to be THE answer. `submitResultTerminal` is a
+	// compare-and-swap single-assignment cell: the first accepted non-checkpoint
+	// call locks it; a rejected claim (gate verification) does NOT lock it, so the
+	// legitimate bounded retry flow below can still resolve it later.
+	progress.checkpoints = [];
+	let submitResultTerminal: SubmitResultItem | undefined;
+	// PLAN-350 S3 fix: a gate-VERIFICATION-rejected terminal claim resolves
+	// NEITHER `submitResultTerminal` NOR `progress.checkpoints` (see
+	// tool_execution_end below) — by design, since a rejected claim must never
+	// be treated as "the answer". But the `gate_failed` outcome still needs to
+	// know a gate-rejected candidate EXISTED (vs. the subagent never submitting
+	// anything at all) to render "gate_failed" instead of a generic "failed".
+	// Tracked separately, read-only for outcome determination — never fed into
+	// finalizeSubprocessOutput/structuredResult.
+	let lastGateRejectedSubmission: SubmitResultItem | undefined;
+	// PLAN-350 S5: bounded backstop on the checkpoint stream specifically (never on
+	// `submitResultTerminal`, which is a single CAS write with nothing to detect).
+	const MAX_CHECKPOINTS = settings.get("task.maxCheckpoints") ?? 20;
+	// PLAN-350 S8: distinct from a normal terminal resolution — drives the
+	// "checkpoint-loop-detected" outcome instead of a plain "completed", so the
+	// task-summary never silently renders a detected loop as a clean success.
+	let checkpointLoopDetected = false;
+
 	let pendingEventProcessing = Promise.resolve();
 	let missingVerificationFailures: GateFailure[] | undefined;
 
@@ -1031,10 +1163,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// Check for registered subagent tool handler
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
 				const eventArgs = (event as { args?: Record<string, unknown> }).args ?? {};
-				let shouldTerminate = false;
 				if (handler) {
 					let extractedData: unknown;
 					let acceptExtractedData = true;
+					// PLAN-350 S3: accepted ⇒ gate-verified (or no gate configured); resolves
+					// against `submitResultTerminal`/`progress.checkpoints` below based on
+					// keepGoing, NOT a single "submitResultCalled" boolean conflating both.
 					let acceptSubmitResult = false;
 					if (handler.extractData) {
 						extractedData = handler.extractData({
@@ -1046,7 +1180,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						});
 						if (event.toolName === "submit_result" && extractedData !== undefined && !event.isError) {
 							const submitResult = extractedData as SubmitResultItem;
-							if (submitResult.status === "success" && hasRuntimeVerification(options.runtimeVerification)) {
+							// Gate verification only applies to a candidate TERMINAL claim
+							// (keepGoing false/absent) — a checkpoint is never gated, since it
+							// isn't claiming the task is done.
+							if (
+								!submitResult.keepGoing &&
+								submitResult.status === "success" &&
+								hasRuntimeVerification(options.runtimeVerification)
+							) {
 								const executions = gatherSubprocessExecutions(progress.extractedToolData);
 								const gateResult = await verifyGates({
 									gateCmd: options.runtimeVerification?.gateCmd,
@@ -1073,18 +1214,66 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						}
 						if (extractedData !== undefined) {
 							if (event.toolName === "submit_result") {
-								// BUG-354: always record submit_result entries; stamp the runtime gate verdict
-								// so finalization can distinguish gate-failed from a successful submission.
+								// BUG-354: stamp the runtime gate verdict so finalization can
+								// distinguish gate-failed from a successful submission.
 								const submitItem = extractedData as SubmitResultItem;
 								submitItem.gateAccepted = acceptSubmitResult;
 								if (!acceptSubmitResult && missingVerificationFailures) {
 									submitItem.gateFailures = missingVerificationFailures;
 								}
+								// Still record the raw item in extractedToolData for any legacy
+								// consumer (render.ts review-verdict lookup uses the LAST entry,
+								// which after this change is always the terminal item — see below).
 								progress.extractedToolData = progress.extractedToolData || {};
 								const existing = progress.extractedToolData.submit_result || [];
 								existing.push(submitItem);
 								progress.extractedToolData.submit_result = existing;
-								submitResultCalled = acceptSubmitResult;
+
+								if (acceptSubmitResult && submitItem.keepGoing) {
+									// PLAN-350 S3: checkpoint — append to the multi-valued log, do
+									// NOT touch submitResultTerminal. Genuinely does not resolve
+									// anything; the session continues.
+									progress.checkpoints = progress.checkpoints || [];
+									progress.checkpoints.push({
+										data: submitItem.data,
+										error: submitItem.error,
+										at: Date.now(),
+									});
+
+									// PLAN-350 S5: bounded backstop — checkpoint cap and
+									// payload-similarity heuristic, evaluated ONLY against the
+									// checkpoint bucket (never against submitResultTerminal, a
+									// single CAS write with nothing to detect).
+									const overCap = MAX_CHECKPOINTS > 0 && progress.checkpoints.length > MAX_CHECKPOINTS;
+									const spamDetected = isCheckpointSpamPattern(progress.checkpoints, 5);
+									if ((overCap || spamDetected) && lifecycle === "running") {
+										logger.warn("Subagent checkpoint stream flagged as anomalous", {
+											checkpointCount: progress.checkpoints.length,
+											overCap,
+											spamDetected,
+											agentId: id,
+										});
+										checkpointLoopDetected = true;
+										lifecycle = "closing";
+										requestAbort("terminate");
+									}
+								} else if (acceptSubmitResult && !submitItem.keepGoing) {
+									// PLAN-350 S3: resolves the single-assignment terminal cell.
+									submitResultTerminal = submitItem;
+									progress.terminal = { data: submitItem.data, error: submitItem.error, at: Date.now() };
+									lifecycle = "closing";
+									requestAbort("terminate");
+								}
+								// Gate-rejected terminal claims (acceptSubmitResult===false, e.g.
+								// missingVerificationFailures set) resolve NEITHER store — lifecycle
+								// stays "running" so the existing bounded gate-retry reminder flow
+								// below can still legitimately re-prompt for a corrected resubmission.
+								// Tracked separately (read-only, outcome-determination use only) so a
+								// run that never recovers still renders "gate_failed", not a generic
+								// "failed", if this candidate turns out to be the last one ever seen.
+								if (!acceptSubmitResult && !submitItem.keepGoing) {
+									lastGateRejectedSubmission = submitItem;
+								}
 							} else if (acceptExtractedData) {
 								progress.extractedToolData = progress.extractedToolData || {};
 								const existing = progress.extractedToolData[event.toolName] || [];
@@ -1104,23 +1293,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							}
 						}
 					}
-
-					shouldTerminate = Boolean(
-						handler.shouldTerminate?.({
-							toolName: event.toolName,
-							toolCallId: event.toolCallId,
-							args: eventArgs,
-							result: event.result,
-							isError: event.isError,
-						}),
-					);
-					if (event.toolName === "submit_result" && !submitResultCalled) {
-						shouldTerminate = false;
-					}
-					if (shouldTerminate) {
-						terminating = true;
-						requestAbort("terminate");
-					}
+					// NB: `handler.shouldTerminate` is no longer read here. Termination is
+					// now driven entirely by `lifecycle` transitions above (set precisely
+					// where a terminal/anomalous result is recognized) — the in-process
+					// agent loop ALSO independently halts synchronously via
+					// `AgentToolResult.haltsLoop` (agent-loop.ts runLoop), which is what
+					// actually prevents the model from regaining a turn. This executor-level
+					// `requestAbort("terminate")` is the async signal for OTHER waiters
+					// (session.waitForIdle, the retry loops below) to stop, not the
+					// primary termination mechanism.
 				}
 				if (event.toolName === "todo_write") {
 					const todoResult = event.result as { details?: { nodes?: unknown } } | undefined;
@@ -1136,8 +1317,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 				}
 				flushProgress = true;
-				// Enforce tool call budget
-				if (maxToolCalls > 0 && !submitResultCalled && progress.toolCount > maxToolCalls) {
+				// Enforce tool call budget. PLAN-350 S2/W2: the old exemption
+				// (`!submitResultCalled`) turned this ceiling OFF entirely the moment ANY
+				// submit_result succeeded — exactly the hole a runaway subagent exploited
+				// for ~700 further calls. The budget now applies unconditionally while
+				// `lifecycle === "running"`; once the terminal cell resolves (or the
+				// checkpoint-loop detector fires), `haltsLoop` has already stopped the
+				// model from issuing further tool calls at all, so `lifecycle !== "running"`
+				// here just avoids a redundant abort request, not a re-introduced exemption.
+				if (maxToolCalls > 0 && lifecycle === "running" && progress.toolCount > maxToolCalls) {
 					logger.warn("Subagent exceeded tool call budget", {
 						toolCount: progress.toolCount,
 						maxToolCalls,
@@ -1313,6 +1501,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			checkAbort();
 
 			const resolvedCandidates = resolveModelCandidates(modelPatterns, modelRegistry, settings);
+			// Fail loud when an EXPLICIT model request cannot be honored. Passing an
+			// undefined model here would silently degrade the subagent onto whatever
+			// `createAgentSession` picks as a last resort (historically the first
+			// keyed built-in model — e.g. a dead claude-3-5-sonnet-20240620 → 404).
+			// A deliberate `model:`/override we can't resolve is a hard error, not an
+			// invitation to guess. Empty `modelPatterns` (inherit session default)
+			// still legitimately flows through as `model: undefined`.
+			if (modelPatterns.length > 0 && resolvedCandidates.length === 0) {
+				const available = modelRegistry.getAvailable();
+				const authedProviders = Array.from(new Set(available.map(m => m.provider))).sort();
+				const requested = modelPatterns.join(", ");
+				const providerHint =
+					authedProviders.length > 0
+						? `Authenticated providers: ${authedProviders.join(", ")}.`
+						: "No providers are authenticated.";
+				throw new Error(
+					`Requested model "${requested}" is not available (no matching authenticated model — provider not logged in or model id not found). ${providerHint} Refusing to silently substitute a different model.`,
+				);
+			}
 			const startupCandidates: Array<{
 				model: (typeof resolvedCandidates)[number]["model"] | undefined;
 				thinkingLevel?: ThinkingLevel;
@@ -1535,7 +1742,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						await session.waitForIdle();
 						await pendingEventProcessing;
 						const startupAssistant = session.getLastAssistantMessage();
-						if (!submitResultCalled && progress.toolCount === 0 && startupAssistant?.stopReason === "error") {
+						if (!submitResultTerminal && progress.toolCount === 0 && startupAssistant?.stopReason === "error") {
 							startupErrorMessage = startupAssistant.errorMessage || "Subagent failed";
 						}
 					} catch (err) {
@@ -1547,7 +1754,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 
 					if (
-						!submitResultCalled &&
+						!submitResultTerminal &&
 						progress.toolCount === 0 &&
 						shouldFallbackStartupFailure(startupErrorMessage)
 					) {
@@ -1605,9 +1812,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 
 				const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
+				// PLAN-350 S1: `lifecycle === "running"` replaces the old `!terminating`.
+				// A gate-rejected terminal claim (missingVerificationFailures set) leaves
+				// lifecycle at "running" deliberately (see tool_execution_end above) so
+				// this legitimate resubmission reminder can still fire; a resolved terminal
+				// OR a detected checkpoint loop moves lifecycle to "closing", which
+				// excludes both retry blocks below — one check, one authority, instead of
+				// `terminating`/`submitResultCalled` needing to independently agree.
 				if (
-					!terminating &&
-					!submitResultCalled &&
+					lifecycle === "running" &&
+					!submitResultTerminal &&
 					missingVerificationFailures &&
 					(!abortSignal.aborted || abortReason === "terminate")
 				) {
@@ -1630,8 +1844,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 				let retryCount = 0;
 				while (
-					!terminating &&
-					!submitResultCalled &&
+					lifecycle === "running" &&
+					!submitResultTerminal &&
 					!missingVerificationFailures &&
 					retryCount < MAX_SUBMIT_RESULT_RETRIES &&
 					(!abortSignal.aborted || abortReason === "terminate")
@@ -1679,8 +1893,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						error ??= lastAssistant.errorMessage || "Subagent failed";
 					}
 				}
-				if (
-					!submitResultCalled &&
+				if (!submitResultTerminal && checkpointLoopDetected && !error) {
+					// PLAN-350 S5/S8: the checkpoint anomaly detector fired before any
+					// terminal result resolved — an honest, DISTINCT outcome from both a
+					// clean completion and a plain "missing submit_result" (the subagent DID
+					// call submit_result, repeatedly, just never with a real terminal claim).
+					const checkpointMessage = `Subagent's submit_result checkpoint stream was flagged as anomalous (${progress.checkpoints?.length ?? 0} checkpoint(s), no terminal result) and forcibly terminated.`;
+					abortReasonText ??= checkpointMessage;
+					error = checkpointMessage;
+					exitCode = 1;
+				} else if (
+					!submitResultTerminal &&
 					missingVerificationFailures &&
 					(!abortSignal.aborted || abortReason === "terminate") &&
 					!aborted &&
@@ -1691,7 +1914,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					error = verificationMessage;
 					exitCode = 1;
 				} else if (
-					!submitResultCalled &&
+					!submitResultTerminal &&
 					(!abortSignal.aborted || abortReason === "terminate") &&
 					!aborted &&
 					!error
@@ -1764,24 +1987,27 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	// Use final output if available, otherwise accumulated output
 	let rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
-	const submitResultItems = progress.extractedToolData?.submit_result as SubmitResultItem[] | undefined;
 	const reportFindings = progress.extractedToolData?.report_finding as ReviewFinding[] | undefined;
+	// PLAN-350 S3: pass the RESOLVED terminal cell directly — never re-derived
+	// from "last array entry", which is precisely the bug that let a real report
+	// get silently buried under ~700 subsequent spam calls in the original
+	// incident. `submitResultTerminal` is set exactly once, at the single call
+	// site that resolves it (tool_execution_end above).
 	const finalized = finalizeSubprocessOutput({
 		rawOutput,
 		exitCode,
 		stderr,
 		doneAborted: Boolean(done.aborted),
 		signalAborted: Boolean(signal?.aborted),
-		submitResultItems,
+		submitResultTerminal,
 		reportFindings,
 		outputSchema,
 	});
 	rawOutput = finalized.rawOutput;
 	exitCode = finalized.exitCode;
 	stderr = finalized.stderr;
-	const lastSubmitResult = submitResultItems?.[submitResultItems.length - 1];
 	const submitResultAbortReason =
-		lastSubmitResult?.status === "aborted" ? lastSubmitResult.error || "Subagent aborted task" : undefined;
+		submitResultTerminal?.status === "aborted" ? submitResultTerminal.error || "Subagent aborted task" : undefined;
 	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
 	const { content: truncatedOutput } = truncateTail(rawOutput, {
 		maxBytes: MAX_OUTPUT_BYTES,
@@ -1820,11 +2046,22 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		: undefined;
 	const structuredResult = (() => {
 		if (
-			lastSubmitResult?.status === "success" &&
-			lastSubmitResult.data !== undefined &&
-			lastSubmitResult.data !== null
+			submitResultTerminal?.status === "success" &&
+			submitResultTerminal.data !== undefined &&
+			submitResultTerminal.data !== null
 		) {
-			return normalizeCompleteData(lastSubmitResult.data, reportFindings);
+			return normalizeCompleteData(submitResultTerminal.data, reportFindings);
+		}
+		// BUG-354: a gate-rejected claim is never in submitResultTerminal (it's not
+		// resolved), but its structured payload should still be preserved for the
+		// orchestrator to inspect — the run is marked failed via outcome="gate_failed"
+		// + non-zero exitCode, not by hiding what was claimed.
+		if (
+			lastGateRejectedSubmission?.status === "success" &&
+			lastGateRejectedSubmission.data !== undefined &&
+			lastGateRejectedSubmission.data !== null
+		) {
+			return normalizeCompleteData(lastGateRejectedSubmission.data, reportFindings);
 		}
 		if (exitCode === 0 && !wasAborted) {
 			return resolveFallbackCompletion(rawOutput, outputSchema)?.data;
@@ -1835,21 +2072,29 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const textPreview =
 		buildTextPreview(truncatedOutput) ?? buildTextPreview(structuredText) ?? buildTextPreview(stderr);
 	const spawnAudit = parseSpawnAudit(textPreview) ?? parseSpawnAudit(stderr);
+	// PLAN-350 S8: checkpoint-loop-detected is checked BEFORE the ordinary
+	// success/failure ternary — a detected anomaly must never render as a plain
+	// "completed", even if exitCode happens to be 0 by the time we get here.
 	const outcome: SubagentOutcome = wasAborted
 		? "aborted"
-		: spawnAudit?.reason === "policy-rejected"
-			? "policy-rejected"
-			: missingSubmitResultWarning
-				? "submit-result-missing"
-				: exitCode === 0
-					? structuredResult !== undefined || textPreview
-						? "completed"
-						: "completed-empty"
-					: stderr.includes("Output does not match schema")
-						? "schema-invalid"
-						: lastSubmitResult?.status === "success" && lastSubmitResult.gateAccepted === false
-							? "gate_failed"
-							: "failed";
+		: checkpointLoopDetected && !submitResultTerminal
+			? "checkpoint-loop-detected"
+			: spawnAudit?.reason === "policy-rejected"
+				? "policy-rejected"
+				: missingSubmitResultWarning
+					? "submit-result-missing"
+					: exitCode === 0
+						? structuredResult !== undefined || textPreview
+							? "completed"
+							: "completed-empty"
+						: stderr.includes("Output does not match schema")
+							? "schema-invalid"
+							: // PLAN-350 S3: submitResultTerminal is NEVER set for a gate-rejected
+								// claim (it's not resolved — that's the point of the CAS split), so
+								// this must consult the separately-tracked rejection record instead.
+								lastGateRejectedSubmission !== undefined
+								? "gate_failed"
+								: "failed";
 	progress.status = outcome;
 	scheduleProgress(true);
 
@@ -1883,6 +2128,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		extractedToolData: progress.extractedToolData,
 		outputMeta,
 		spawnAudit,
-		gateFailures: lastSubmitResult?.gateFailures,
+		gateFailures: submitResultTerminal?.gateFailures ?? lastGateRejectedSubmission?.gateFailures,
+		checkpointCount: progress.checkpoints?.length ?? 0,
 	};
 }

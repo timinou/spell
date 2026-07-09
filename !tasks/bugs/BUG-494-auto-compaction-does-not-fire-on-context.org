@@ -1,0 +1,107 @@
+#+TITLE: Auto-compaction does not fire on context-overflow error during subagent yield-reminder flow
+#+STATE: ITEM
+#+SESSION_ID: 1528e03fce2f96b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-09T09-53-13-016Z_1528e03fce2f96b4.jsonl]]
+#+CUSTOM_ID: BUG-494-auto-compaction-does-not-fire-on-context
+
+* Initial Message
+
+PLAN-204 (Turn Trace observability) — 3 commits landed (schema, effects instrumentation, right-rail panel). The subagent's own final report came back as garbage ({"ww50": true}) and it left 5 uncommitted
+ debug scratch test files behind — a red flag I chased down myself. Root cause confirmed by direct source read: the live-streaming mechanism doesn't work at all — the LiveView subscribes on the wrong PubSub
+ bus (Djinn.pubsub() default vs. the actual Agentmaker.PubSub broadcast) AND is missing the tuple-message pattern: match. This is the PLAN's core deliverable (D3/D4 — the "live" in Turn Trace) and it was 100%
+ non-functional. W4 (the E2E journey) was also never attempted.
+
+
+
+In File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-07-07T20-41-37-797Z_1526e17ac15f55a1.jsonl
+ ID: 1526e17ac15f55a1
+
+
+
+
+WHY DID IT COME AS GARBAGE?????
+
+
+
+Root cause it please
+
+#+FILETAGS: :coding-agent:compaction:subagent:
+
+* Evidence
+`26-RichDialogueOverAsk.jsonl` (subagent transcript,
+`/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-06-19T19-50-14-745Z_150fa919f66011d7/26-RichDialogueOverAsk.jsonl`):
+after a `finish-the-loop` yield-reminder fires 3 times, each response is:
+```
+stopReason: "error"
+errorMessage: '400 {"error":{"type":"invalid_request_error","message":"Invalid request: Your request exceeded model token limit: 262144 (requested: 264508)"},...}'
+provider: kimi-code
+model: kimi-k2.7-code-highspeed
+```
+Session ends there. `grep "auto_compaction" <file>` returns ZERO matches \u2014
+compaction never even attempted, despite:
+1. `packages/ai/src/utils/overflow.ts`'s `OVERFLOW_PATTERNS` having a
+   provider-specific entry `/exceeded model token limit/i, // Kimi For Coding`
+   that matches this exact error text verbatim.
+2. `agent-session.ts::#checkCompaction()` running unconditionally on every
+   `agent_end` (including error turns, not gated on success).
+3. `compaction.enabled` defaults `true`, `compaction.strategy` defaults
+   `"context-full"`.
+
+Widened search across ~15k subagent transcripts: 30 files hit
+`"exceeded model token limit"` at least once; **24 of 30 (80%) have it as their
+LAST message** \u2014 session dies unrecovered, never reaching submit_result.
+Confirmed via `git log`/direct read this is NOT a one-off \u2014 same shape recurs
+in `26-OperatorBoardDragPR.jsonl` and `14-W4bForwardOnlyEnrollArchive.jsonl` (both
+also end on the identical 400 error, both also show zero compaction events).
+
+* Impact
+Orchestrator sees ONLY a generic outcome (`submit-result-missing`/`failed`/`aborted`
+depending on exact code path) with no signal that a subagent crashed mid-genuine-
+progress due to unrecovered context overflow \u2014 discovered via
+`plan://PLAN-350` follow-up audit (S6 design evidence), NOT the original PLAN-350
+incident. Traced during investigation for PLAN-350's S6 (discipline-gate escalation)
+but is an INDEPENDENT root cause \u2014 filed separately since PLAN-350 is closed/scoped
+to the submit_result lifecycle fix specifically.
+
+* Investigation needed (could not resolve via transcript archaeology alone)
+Checked the guard conditions in `#checkCompaction` directly:
+- `sameModel = this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id`
+  \u2014 provider/model fields ARE populated normally in the failing message, no
+  obvious mismatch found by reading transcript data alone.
+- `errorIsFromBeforeCompaction` \u2014 no prior compaction entry exists in this
+  session (first and only overflow), so this guard should be `false`
+  (not blocking).
+- Nothing else in the visible code path explains the non-fire from static reading.
+
+Needs one of:
+1. A live repro (dispatch a subagent, artificially push it near context limit via
+   a large-file-reading task, observe whether `#checkCompaction`/`#runAutoCompaction`
+   actually executes) with logging/debugger on `#checkCompaction`'s entry and the
+   `sameModel`/`isContextOverflow(...)` branch.
+2. OR: verify whether `runSubprocess`/`createAgentSession` (task/executor.ts) wires
+   the `AgentSession` event subscription that reaches `#checkCompaction` identically
+   to a top-level interactive session, or whether there's a subagent-specific gap
+   in how `agent_end` propagates for headless/subprocess-mode sessions specifically
+   (this is the most likely candidate not yet ruled out \u2014 subagents run via a
+   different entry path than the TUI, worth checking whether the internal listener
+   that calls `#checkCompaction` is actually attached in that mode).
+
+* Acceptance criteria
+1. Repro: dispatch a subagent task designed to approach/exceed context window
+   (e.g. via repeated large file reads), confirm today it dies with an unrecovered
+   `exceeded model token limit`/equivalent overflow error and no `auto_compaction_start`
+   event.
+2. After fix: same repro triggers `auto_compaction_start`/`auto_compaction_end`
+   and the subagent continues (or at minimum gets a clean, actionable failure
+   instead of a silent context-overflow crash).
+3. Regression test added exercising `#checkCompaction` under a subagent
+   (`runSubprocess`) code path specifically, not just top-level `AgentSession`
+   usage \u2014 the existing compaction test suite (if any) likely only covers the
+   interactive/TUI path, which is why this went unnoticed.
+
+* Related
+- Surfaced during `PLAN-350`'s S6 follow-up evidence audit (subagent submit_result
+  termination gap) \u2014 see that plan's evidence trail for the full incident list
+  (30 files hit the token-limit error, 24 dead-ended).
+- Separate from PLAN-350's actual scope (submit_result lifecycle) \u2014 this is a
+  pre-existing compaction-wiring bug, independently confirmed real and impactful.

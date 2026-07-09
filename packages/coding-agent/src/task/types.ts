@@ -1,11 +1,11 @@
+import { type Static, Type } from "@sinclair/typebox";
 import type { ThinkingLevel } from "@spell/pi-agent-core";
 import type { Usage } from "@spell/pi-ai";
 import { $env } from "@spell/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import type { TodoNode } from "../tools/todo-write";
 import type { BatchImplicitBlocker } from "./batch-scheduler";
-import type { NestedRepoPatch } from "./worktree";
 import type { GateFailure } from "./gate-verification";
+import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
 export type AgentSource = "bundled" | "user" | "project";
@@ -202,7 +202,13 @@ export type SubagentOutcome =
 	| "submit-result-missing"
 	| "schema-invalid"
 	| "gate_failed"
-	| "abandoned";
+	| "abandoned"
+	/** PLAN-350 S5/S8: distinct from "completed" — the checkpoint-stream anomaly
+	 * detector (byte-identical or incrementing-counter-only checkpoints, or the
+	 * checkpoint cap) forced termination before a terminal result was resolved.
+	 * Never rendered as a plain "completed" — an honest outcome for a run that
+	 * looped instead of finishing. */
+	| "checkpoint-loop-detected";
 
 export interface SpawnAuditEntry {
 	requestedAgent: string;
@@ -239,6 +245,24 @@ export interface AgentProgress {
 	usage?: { cost: number };
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
+	/**
+	 * PLAN-350 S3/S4: live checkpoint log — every `submit_result` call with
+	 * `keep_going: true`. Genuinely multi-valued (unlike the old
+	 * `extractedToolData.submit_result` array, this was never pretending to hold
+	 * a single terminal answer). This IS the live-progress heartbeat for a
+	 * long-running subagent: `jobs://<id>` reads this same array, live, via the
+	 * existing progress-sync pipe (task/index.ts syncAsyncProgress) — no separate
+	 * heartbeat mechanism needed.
+	 */
+	checkpoints?: Array<{ data?: unknown; error?: string; at: number }>;
+	/**
+	 * PLAN-350 S3: the resolved terminal result, once set. `undefined` while the
+	 * subagent is still running/checkpointing. Distinguishing this from
+	 * `checkpoints` is what lets the task-summary render an honest outcome — a
+	 * subagent that only ever checkpointed (never resolved) is visibly different
+	 * from one that produced a real terminal answer.
+	 */
+	terminal?: { data?: unknown; error?: string; at: number };
 }
 
 /** Result from a single agent execution */
@@ -284,6 +308,11 @@ export interface SingleResult {
 	spawnAudit?: SpawnAuditEntry;
 	/** Gate verification failures observed mid-execution (set when outcome === "gate_failed"). */
 	gateFailures?: GateFailure[];
+	/** PLAN-350 S3/S8: count of keep_going:true checkpoints emitted before the
+	 * terminal result (or before the checkpoint-loop detector fired). 0 for the
+	 * ordinary single-call path — present so the task-summary can visibly
+	 * distinguish a straightforward completion from one that checkpointed. */
+	checkpointCount?: number;
 }
 
 /** Tool details for TUI rendering */

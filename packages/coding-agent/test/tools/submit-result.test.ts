@@ -50,13 +50,13 @@ describe("SubmitResultTool", () => {
 	it("accepts success payload with data", async () => {
 		const tool = new SubmitResultTool(createSession());
 		const result = await tool.execute("call-1", { result: { data: { ok: true } } } as never);
-		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined });
+		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined, keepGoing: false });
 	});
 
 	it("accepts aborted payload with error only", async () => {
 		const tool = new SubmitResultTool(createSession());
 		const result = await tool.execute("call-2", { result: { error: "blocked" } } as never);
-		expect(result.details).toEqual({ data: undefined, status: "aborted", error: "blocked" });
+		expect(result.details).toEqual({ data: undefined, status: "aborted", error: "blocked", keepGoing: false });
 	});
 
 	it("accepts arbitrary data when outputSchema is null", async () => {
@@ -66,6 +66,7 @@ describe("SubmitResultTool", () => {
 			data: { nested: { x: 1 }, ok: true },
 			status: "success",
 			error: undefined,
+			keepGoing: false,
 		});
 	});
 
@@ -75,13 +76,14 @@ describe("SubmitResultTool", () => {
 
 		expect(dataSchema.type).toBeUndefined();
 		const primitiveResult = await tool.execute("call-true-number", { result: { data: 42 } } as never);
-		expect(primitiveResult.details).toEqual({ data: 42, status: "success", error: undefined });
+		expect(primitiveResult.details).toEqual({ data: 42, status: "success", error: undefined, keepGoing: false });
 
 		const arrayResult = await tool.execute("call-true-array", { result: { data: ["ok", 1, false] } } as never);
 		expect(arrayResult.details).toEqual({
 			data: ["ok", 1, false],
 			status: "success",
 			error: undefined,
+			keepGoing: false,
 		});
 	});
 	it("repairs strict schema generation for required-only object output schemas", () => {
@@ -227,7 +229,7 @@ describe("SubmitResultTool", () => {
 		expect(secondResult.content).toEqual([
 			{
 				type: "text",
-				text: "Result submitted (schema validation overridden after 2 failed attempt(s)).",
+				text: "Result submitted (schema validation overridden after 2 failed attempt(s))). Session ending now.",
 			},
 		]);
 	});
@@ -257,6 +259,7 @@ describe("SubmitResultTool", () => {
 			data: { value: 123, nested: { ok: true } },
 			status: "success",
 			error: undefined,
+			keepGoing: false,
 		});
 	});
 	it("falls back to unconstrained data schema when output schema is circular", async () => {
@@ -270,7 +273,7 @@ describe("SubmitResultTool", () => {
 		expect(dataSchema.type).toBe("object");
 
 		const result = await tool.execute("call-circular-schema", { result: { data: { ok: true } } } as never);
-		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined });
+		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined, keepGoing: false });
 	});
 
 	it("falls back to unconstrained data schema when output schema is deeply nested", async () => {
@@ -306,7 +309,7 @@ describe("SubmitResultTool", () => {
 		expect(dataSchema.type).toBe("object");
 
 		const result = await tool.execute("call-deep-schema", { result: { data: { nested: true } } } as never);
-		expect(result.details).toEqual({ data: { nested: true }, status: "success", error: undefined });
+		expect(result.details).toEqual({ data: { nested: true }, status: "success", error: undefined, keepGoing: false });
 	});
 
 	it("handles non-object output schemas without blocking successful result submission", async () => {
@@ -319,6 +322,7 @@ describe("SubmitResultTool", () => {
 				data: { value: outputSchema },
 				status: "success",
 				error: undefined,
+				keepGoing: false,
 			});
 		}
 	});
@@ -343,7 +347,12 @@ describe("SubmitResultTool", () => {
 		);
 
 		const result = await tool.execute("call-long", { result: { data: { token: "abcd" } } } as never);
-		expect(result.details).toEqual({ data: { token: "abcd" }, status: "success", error: undefined });
+		expect(result.details).toEqual({
+			data: { token: "abcd" },
+			status: "success",
+			error: undefined,
+			keepGoing: false,
+		});
 	});
 
 	it("throws on first schema validation failure and accepts non-conforming data on second failure", async () => {
@@ -364,11 +373,16 @@ describe("SubmitResultTool", () => {
 		);
 
 		const secondResult = await tool.execute("call-short-2", { result: { data: { token: "ab" } } } as never);
-		expect(secondResult.details).toEqual({ data: { token: "ab" }, status: "success", error: undefined });
+		expect(secondResult.details).toEqual({
+			data: { token: "ab" },
+			status: "success",
+			error: undefined,
+			keepGoing: false,
+		});
 		expect(secondResult.content).toEqual([
 			{
 				type: "text",
-				text: "Result submitted (schema validation overridden after 2 failed attempt(s)).",
+				text: "Result submitted (schema validation overridden after 2 failed attempt(s))). Session ending now.",
 			},
 		]);
 	});
@@ -387,10 +401,14 @@ describe("SubmitResultTool", () => {
 		const tool = new SubmitResultTool(createSession({ outputSchema }));
 
 		const firstResult = await tool.execute("call-valid-1", { result: { data: { token: "abcd" } } } as never);
-		expect(firstResult.content).toEqual([{ type: "text", text: "Result submitted." }]);
+		expect(firstResult.content).toEqual([
+			{ type: "text", text: "Result submitted. Session ending now — no further tool calls will be processed." },
+		]);
 
 		const secondResult = await tool.execute("call-valid-2", { result: { data: { token: "abcde" } } } as never);
-		expect(secondResult.content).toEqual([{ type: "text", text: "Result submitted." }]);
+		expect(secondResult.content).toEqual([
+			{ type: "text", text: "Result submitted. Session ending now — no further tool calls will be processed." },
+		]);
 
 		await expect(
 			tool.execute("call-invalid-after-valid", { result: { data: { token: "ab" } } } as never),
@@ -430,5 +448,59 @@ describe("SubmitResultTool", () => {
 	it("sets lenientArgValidation so agent-loop bypasses validation errors", () => {
 		const tool = new SubmitResultTool(createSession());
 		expect(tool.lenientArgValidation).toBe(true);
+	});
+
+	// PLAN-350 S2/S3: keep_going / haltsLoop semantics
+	describe("keep_going (PLAN-350)", () => {
+		it("defaults keepGoing to false and sets haltsLoop true when keep_going is omitted", async () => {
+			const tool = new SubmitResultTool(createSession());
+			const result = await tool.execute("call-default", { result: { data: { ok: true } } } as never);
+			expect((result.details as { keepGoing: boolean }).keepGoing).toBe(false);
+			expect(result.haltsLoop).toBe(true);
+		});
+
+		it("sets keepGoing true and haltsLoop false when keep_going:true is passed", async () => {
+			const tool = new SubmitResultTool(createSession());
+			const result = await tool.execute("call-checkpoint", {
+				result: { data: { progress: "halfway" }, keep_going: true },
+			} as never);
+			expect(result.details).toEqual({
+				data: { progress: "halfway" },
+				status: "success",
+				error: undefined,
+				keepGoing: true,
+			});
+			expect(result.haltsLoop).toBe(false);
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: "Checkpoint recorded. Session continues — keep working, then call submit_result again (omit keep_going, or set it false) when done.",
+				},
+			]);
+		});
+
+		it("keep_going:true with error is a checkpoint (does not halt), not forced terminal", async () => {
+			const tool = new SubmitResultTool(createSession());
+			const result = await tool.execute("call-checkpoint-error", {
+				result: { error: "approach A failed, trying B", keep_going: true },
+			} as never);
+			expect(result.details).toEqual({
+				data: undefined,
+				status: "aborted",
+				error: "approach A failed, trying B",
+				keepGoing: true,
+			});
+			// keep_going is the SOLE authority — error present does NOT force a halt.
+			expect(result.haltsLoop).toBe(false);
+		});
+
+		it("keep_going:false explicitly still halts (same as omitted)", async () => {
+			const tool = new SubmitResultTool(createSession());
+			const result = await tool.execute("call-explicit-false", {
+				result: { data: { ok: true }, keep_going: false },
+			} as never);
+			expect((result.details as { keepGoing: boolean }).keepGoing).toBe(false);
+			expect(result.haltsLoop).toBe(true);
+		});
 	});
 });

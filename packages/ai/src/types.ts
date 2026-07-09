@@ -416,6 +416,9 @@ export interface ToolResultMessage<TDetails = any> {
 	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
 	prunedAt?: number;
 	timestamp: number; // Unix timestamp in milliseconds
+	/** Mirrors `AgentToolResult.haltsLoop` — propagated so `runLoop` can make the
+	 * continuation decision without re-deriving it from tool state. */
+	haltsLoop?: boolean;
 }
 
 export type Message = UserMessage | DeveloperMessage | AssistantMessage | ToolResultMessage;

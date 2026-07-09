@@ -1357,6 +1357,21 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.maxCheckpoints": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "tasks",
+			label: "Max Checkpoints per Subagent (PLAN-350)",
+			description:
+				"Maximum submit_result checkpoints (keep_going:true calls) a subagent may emit before " +
+				"a terminal result before forced termination. Bounds the checkpoint-log failure class " +
+				"(a subagent that never resolves a terminal answer) independent of the payload-similarity " +
+				"detector. Set 0 to disable.",
+			submenu: true,
+		},
+	},
+
 	"task.cacheStaggerMs": {
 		type: "number",
 		default: 800,

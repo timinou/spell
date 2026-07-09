@@ -1,0 +1,621 @@
+#+TITLE: Subagent submit_result termination gap + loop-visibility UX
+#+STATE: DONE
+#+SESSION_ID: 1528e03fce2f96b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-09T09-53-13-016Z_1528e03fce2f96b4.jsonl]]
+#+CUSTOM_ID: PLAN-350-subagent-submit-result-termination-gap-l
+
+#+FILETAGS: :coding-agent:executor:reliability:
+
+* Initial Message
+
+PLAN-204 (Turn Trace observability) — 3 commits landed (schema, effects instrumentation, right-rail panel). The subagent's own final report came back as garbage ({"ww50": true}) and it left 5 uncommitted
+ debug scratch test files behind — a red flag I chased down myself. Root cause confirmed by direct source read: the live-streaming mechanism doesn't work at all — the LiveView subscribes on the wrong PubSub
+ bus (Djinn.pubsub() default vs. the actual Agentmaker.PubSub broadcast) AND is missing the tuple-message pattern: match. This is the PLAN's core deliverable (D3/D4 — the "live" in Turn Trace) and it was 100%
+ non-functional. W4 (the E2E journey) was also never attempted.
+
+In File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-07-07T20-41-37-797Z_1526e17ac15f55a1.jsonl
+ ID: 1526e17ac15f55a1
+
+WHY DID IT COME AS GARBAGE?????
+
+Root cause it please
+
+* Root incident (evidence)
+PLAN-204 subagent (session `1526e17ac15f55a1`, child `10-plan204Full`) submitted a real,
+honest partial-completion report via `submit_result` at 2026-07-08T20:14:02Z (accepted,
+`status: success`). The session then continued for **4h23m**, calling `submit_result`
+~700 more times with content-free placeholder payloads (`{"a1":true}` … `{"vv50":true}`
+… `{"ww50":true}`), each individually "succeeding," before finally ending. The
+orchestrator's `task`/`await` surfaced only the LAST call (`{"ww50":true}`) — the real
+report was silently discarded by recency. Root-caused by direct source read of
+`packages/coding-agent/src/task/executor.ts` + `submit-result.ts` (not guessed).
+
+`finish-the-loop` (open-work/yield-reminder discipline) is NOT the cause — it fired
+exactly once, at the very end, well after the loop had already run its course. Initial
+diagnosis mis-attributed this; corrected after tracing `shouldTerminate` end-to-end.
+
+* Confirmed mechanism (file:line, `packages/coding-agent/src/`)
+The executor tracks "is this subagent done" via FIVE unsynchronized variables:
+1. `tools/submit-result.ts:210-222` — handler correctly returns `shouldTerminate: !isError`.
+2. `task/executor.ts:1093-1098` — dispatch loop sets `terminating=true` +
+   `requestAbort("terminate")` on `shouldTerminate`, BUT this is async/advisory:
+   `session.abort()` does not synchronously halt in-flight model generation or block
+   the next turn from being scheduled.
+3. `task/executor.ts:1124-1129` — the ONE real safety net (`maxToolCalls` budget) is
+   explicitly bypassed once `submitResultCalled` is true:
+   `if (maxToolCalls > 0 && !submitResultCalled && progress.toolCount > maxToolCalls)`.
+   The ceiling turns itself off exactly when a stuck/looping agent needs it most.
+4. No wall-clock timeout anywhere in the dispatch loop. `startTime` is captured only
+   for post-hoc `durationMs` reporting, never checked during execution.
+5. `prompts/system/subagent-system-prompt.md` instructs "call submit_result exactly
+   once" but has no "STOP after it succeeds" directive; the tool's return text
+   ("Result submitted.") carries no terminal/negative signal.
+6. `task/executor.ts` `finalizeSubprocessOutput` (~L410-480) takes only
+   `submitResultItems[submitResultItems.length - 1]` — last-call-wins, no anomaly
+   signal when many calls exist. `submitResultItems: Array<>` models "the result" as a
+   list when there is exactly one authoritative answer — "last wins" by accident, not
+   by design.
+7. When a `task` dispatch declares no `schema`, `submit-result.ts`'s `#validate` is
+   `undefined` — any payload shape passes. `{"ww50":true}` was structurally
+   indistinguishable from a real report to the validator.
+8. Separately (via `0-traceDisciplineGate`): yield-reminder discipline behavior is
+   byte-identical at every `taskDepth` (`agent-session.ts` `isSubagentSession` only
+   gates `taskDepth > 0`, no escalation to parent exists); `open-work` guard has no
+   way to distinguish "legitimately blocked" from "lazily incomplete" — only
+   pending/in_progress/completed/abandoned todo states exist, no "blocked" status.
+
+Historical corroboration: `3-SubagentExecutorFixes` (a prior subagent session, May
+2026) attempted a fix for this exact bug class (BUG-354/355/356) via flag-based
+patching (a `terminating` boolean, a `gateAccepted`/`gate-failed` status, checked in
+several independent places). That code landed and is live in current `executor.ts`
+today (visible at L308-309, L439-441, L1077-1079, L1869-1870) — and the identical
+loop recurred at least 4 more times afterward (see prevalence audit below). This is
+direct evidence that scattered-flag patching is the WRONG SHAPE for this bug, not
+speculation — it was tried once already and failed.
+
+* Goal
+Close the termination-enforcement gap so a subagent cannot spin post-submission, and
+make loop/anomaly conditions visible to the orchestrator in real time instead of only
+discoverable via post-hoc transcript archaeology — via a structural fix to the
+underlying data model, not additional scattered checkpoints on top of the existing
+unsynchronized state.
+
+* Non-goals
+- Not rewriting the discipline system generally — `finish-the-loop`/`open-work` guard
+  is a separate, correctly-scoped mechanism; only its escalation-to-parent gap is in
+  scope here (S6 below).
+- Not changing `task` tool's async/background job model.
+- Not forcing `submit_result` to single-shot-only — the design explicitly preserves
+  the freedom to submit multiple results (checkpointing), per user direction.
+
+* Structural design
+** Why a checkpoint-list-of-patches is the wrong shape
+The executor's "is this subagent done" question is answered today by five
+unsynchronized variables (`terminating`, `submitResultCalled`, `abortSignal.aborted`,
+`abortReason`, `submitResultItems[]` used as if it were a single-value slot). Adding
+more independently-placed checks on top of that (a hard gate here, a budget cap
+there, a detector somewhere else) doesn't remove the race between them — it relocates
+it, which is exactly why the prior fix attempt (`3-SubagentExecutorFixes`, above)
+already tried that shape and the same failure recurred. The fix has to change the
+data model these five variables are approximating, not add a sixth.
+
+** S1 — Collapse lifecycle to one enum, one authority
+Replace `terminating` + `submitResultCalled` + `abortSignal.aborted` + `abortReason`
+(4 variables, 3+ read sites, no shared source of truth) with one
+`SessionLifecycle: "running" | "closing" | "closed"` field on the executor's
+per-subagent state. Every site that currently reads one of the old four booleans
+reads this instead. Scheduling another turn while `closed` becomes inexpressible by
+the type, not merely checked-against at each call site.
+
+** S2 — `submit_result`'s terminal call is not a tool call
+Every other tool (bash/edit/find) correctly returns control to the model to decide
+what happens next. A terminal `submit_result` has no "next" — that's its entire
+purpose. Today, acceptance still goes through the same async tool round-trip as any
+other tool, so the model regains a turn afterward exactly like it would after
+`bash` — that mismodeling is the direct cause of "700 more calls after success."
+Fix: resolving the terminal cell (S3) synchronously ends the generation stream
+itself — no further completion request is issued for that session. This removes the
+"calls after acceptance" failure class by construction: there is no turn left in
+which to make another call, not an abort signal racing to catch one in time.
+
+** S3 — Split the result store: checkpoint log (multi-valued) vs terminal cell (single-assignment)
+Preserves the freedom to submit several results — by design, per explicit direction
+to keep that freedom — via an honest type split instead of one array used for two
+purposes at once (a log AND a single answer, "last write wins" by accident).
+
+New envelope shape (schema-safe — lives in the envelope, never inside a dispatch's
+own declared `data` shape, so it can never collide with a caller's output schema).
+Field is named `keep_going`, not `final`, so the DEFAULT (omitted) behavior reads
+unambiguously as false — an agent that says nothing is NOT asking to keep going:
+#+BEGIN_SRC typescript
+result: {
+  data?: T
+  error?: string
+  keep_going?: boolean   // NEW — sibling of data/error. The SOLE authority on
+                          // terminal vs checkpoint. Omitted/false = terminal
+                          // (resolves `terminal`, ends the session). true = this is
+                          // a checkpoint, session continues — unconditionally.
+}
+#+END_SRC
+
+Rule: `keep_going` is the single, sole authority on session continuation — no other
+field overrides it in either direction. `keep_going` omitted OR `false` → terminal:
+this call resolves `terminal` and ends the session, WHETHER OR NOT `error` is also
+set (an unrecoverable failure report is exactly the normal terminal case — `error`
+just fills the terminal cell's error slot instead of its data slot). `keep_going:
+true` → checkpoint, session continues, unconditionally — including when `error` is
+also present: a subagent legitimately reporting "this specific approach failed, I'm
+trying something else" is a real, useful checkpoint, not a contradiction to reject.
+`error` is descriptive payload content in either case, never a second control-flow
+trigger — deliberately NOT allowed to silently override an explicit `keep_going:
+true`, since that would just reintroduce the "two variables that can disagree"
+problem S1 exists to remove.
+
+Zero migration cost: ~87% of existing dispatches are already correctly single-shot
+and never set `keep_going`, so they keep working exactly as today with no
+prompt/schema change. `keep_going: true` is the ONLY way to opt into checkpoint
+semantics — an explicit, affirmative ask to continue, and by design that assertion
+is trusted over any other field.
+
+Executor state becomes two honestly-typed stores instead of one overloaded array:
+#+BEGIN_SRC typescript
+checkpoints: CheckpointRecord[]   // append-only; every keep_going:true call
+                                  // (error or data, doesn't matter which). Genuinely
+                                  // multi-valued — no invariant violated, because
+                                  // nothing here was ever pretending to be THE answer.
+terminal: Result | null          // compare-and-swap, write-once. First call with
+                                  // keep_going omitted/false locks it (error or data
+                                  // payload, either is a valid terminal shape). Any
+                                  // submit_result call after `terminal` is set is a
+                                  // hard rejection ("session already resolved"), not
+                                  // a silently-recorded overwrite.
+#+END_SRC
+
+Note (important framing, not a caveat to bury): the prevalence audit found ZERO
+existing legitimate uses of `submit_result` as a multi-final/progress-report
+channel. The only multi-call *legitimate* bucket found (2-8 calls per session) was
+schema-REJECTION-then-retry (`isError: true`, not accepted, then corrected) —
+unrelated to deliberate checkpointing. `keep_going`/checkpoints is a forward-looking
+capability being added by deliberate choice, not a fix recovering a usage pattern
+that was already silently relied upon.
+
+** S4 — Observability is a live projection of S2+S3, not a bolted-on heartbeat
+`checkpoints` for a long-running subagent doubles as its own heartbeat content:
+`jobs://<id>` reads the SAME `checkpoints`/`terminal` state the executor already
+maintains, live, not a separately-built mechanism exposing otherwise-private closure
+variables. One structural decision (an honest, publicly-shaped data model) resolves
+both the termination bug and the "4h23m of total silence" visibility gap in one
+motion, rather than requiring a second, unrelated heartbeat mechanism.
+
+** S5 — Checkpoint-stream anomaly detector (bounded backstop, not primary defense)
+Scope: watches ONLY the `checkpoints` bucket (never `terminal` — a single
+compare-and-swap write has nothing to detect). Enforces (a) a hard cap on total
+`keep_going: true` checkpoints per session (e.g. 20) and (b) a payload-similarity
+heuristic — consecutive checkpoints that are byte-identical to the prior one, OR
+differ from it only by an incrementing counter/suffix — derived directly from the
+prevalence audit's observed subtypes (incrementing-counter spam, verbatim-repeat,
+both must OR together since a real incident can drift between them, as seen in the
+DockData file). This heuristic applies regardless of whether a checkpoint carries
+`data` or `error` — a subagent spamming `keep_going:true` + incrementing `error`
+strings is the same failure shape as spamming `data`.
+
+Critically: the ORIGINAL incident (`plan204Full`'s `{"a1":true}` … `{"ww50":true}`)
+cannot recur in this shape at all, independent of whether S5 ever fires — call #1 had
+no `keep_going` field, defaults to terminal, resolves `terminal`, locks it; call #2 is
+a hard structural rejection under S3, full stop. S5 is a backstop for subagents that
+deliberately set `keep_going: true` and then never resolve `terminal`, not the
+primary defense for the incident that started this investigation.
+
+** S6 — Discipline-gate exhaustion escalates to parent
+When a subagent's yield-reminder hits its max-attempts ceiling
+(`agent-session.ts` ~L3977-4060), surface that fact in the task dispatch result
+returned to the orchestrator, instead of the child silently giving up. Confirmed gap:
+yield-reminder behavior today is byte-identical at every `taskDepth` — no escalation
+path exists at any depth. Kept as its own item because it is orthogonal to the
+`submit_result` lifecycle fix (S1-S4): a subagent can exhaust its discipline
+reminders without ever touching `submit_result`.
+
+** S7 — General cross-tool "looping" discipline
+A new discipline type (`config/discipline.ts`): last-N tool calls of the same name
+with near-identical/incrementing arguments → forced interrupt ("you appear to be
+looping — stop, resolve the block or submit your best honest partial result now").
+Kept as its own item because S1-S5 only cover `submit_result` — a subagent could
+still loop on `bash` or `edit` with no natural terminal/checkpoint split to lean on.
+This is the generic version of S5's heuristic, for every other tool.
+
+** Wall-clock ceiling and schema default (folded into acceptance below, not separate waves)
+Two small, uncontroversial additions ride along with the above rather than standing
+as separate waves: (a) a per-subagent-session wall-clock limit, checked each dispatch
+loop tick, as an orthogonal safety net for a subagent that is checkpointing
+genuinely-slowly rather than looping; (b) a default-on minimum schema when a dispatch
+declares none, so a trivial single-key payload (`{"ww1":true}`-shaped) still fails
+validation loudly instead of passing through an unconstrained `Record<string,Any>`.
+
+* Acceptance criteria
+1. A `submit_result` call with `keep_going` omitted or `false` resolves `terminal`
+   and synchronously ends the subagent's generation stream — regardless of whether
+   `data` or `error` is set — a test asserts no further completion request is issued
+   and any subsequent tool call (including another `submit_result`) is hard-rejected
+   with "session already resolved," not silently accepted.
+2. A `submit_result` call with `keep_going: true` appends to `checkpoints` and does
+   NOT terminate the session — regardless of whether `data` or `error` is set on
+   that call (an "attempt failed, trying another approach" checkpoint is valid) — a
+   test asserts the subagent can continue working and later resolve `terminal`
+   normally by omitting `keep_going` (or setting it false) on a later call.
+3. `jobs://<id>` polling mid-run returns the live `checkpoints` array and current
+   `terminal` state (null until resolved) — test or manual verification against a
+   long-running background dispatch with at least one checkpoint emitted.
+4. A synthetic subagent that sets `keep_going: true` indefinitely without ever
+   resolving `terminal` is capped at the configured checkpoint limit (e.g. 20) and
+   forced to resolve — test asserts termination well before 700 calls.
+5. A synthetic checkpoint stream with byte-identical or incrementing-counter-only
+   payloads (in `data` or `error`) triggers S5's detector within the cap, flagged
+   distinctly from a normal multi-checkpoint completion.
+6. Dispatch with no declared `schema` still rejects a trivial single-boolean-key
+   `data` payload.
+7. `bun run --parallel check:ts check:rs` clean; existing executor/submit-result/
+   discipline test suites pass unmodified except where intentionally updated for the
+   new lifecycle/checkpoint model.
+
+* Waves (suggested build order)
+S1 (lifecycle enum) and S3 (checkpoint/terminal split) are the foundation — build
+together first, since S2's synchronous-halt behavior depends on both existing. S2
+(synchronous halt) follows immediately once S1+S3 land — this is the change that
+actually eliminates the incident class. S4 (jobs:// live projection) is nearly free
+once S3 exists — sequence right after. S5 (checkpoint anomaly detector) and the
+wall-clock/schema additions are independent, bounded backstops — parallel-safe with
+S4 or with each other. S6 (discipline escalation) and S7 (generic cross-tool loop
+discipline) are both independent of S1-S5 and of each other — parallel-safe at any
+point.
+
+* Evidence trail
+- Session: `/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-07-07T20-41-37-797Z_1526e17ac15f55a1.jsonl`
+- Looping child transcript: `.../1526e17ac15f55a1/10-plan204Full.jsonl` (lines 892-6125,
+  ~700 submit_result calls, `{"a1":true}` through `{"ww50":true}`)
+- Legitimate report (discarded by last-call-wins): line 409 of the same file,
+  `status: "partial"`, full honest W0-W3-done/W4-blocked breakdown, accepted at
+  2026-07-08T20:14:26Z.
+- Investigation agents (this session): `agent://0-traceDisciplineGate`,
+  `agent://1-traceTerminationBug` — read-only, file:line-cited, no fixes applied.
+
+* Prevalence evidence (2026-07-09 audit, 15047 subagent transcripts)
+Before committing to the fix path, audited every subagent transcript under
+`~/.spell/agent/sessions/` for `submit_result` call-count distribution, and
+DIRECTLY SAMPLED payload content for every file with >8 calls (no inference —
+every verdict below is from reading actual `result.data`/`result.error` content
+at first/middle/last call positions, not from an explore-agent's summary alone;
+four explore-agent verdicts were caught wrong by direct sampling, see below).
+
+** Distribution
+| Bucket | Files | Verdict |
+|--------|-------|---------|
+| 0 calls | 1816 | n/a — aborted before submit or non-task-type agent |
+| 1 call | 11359 | normal — intended path |
+| 2 calls | 1748 | legitimate — malformed-payload/schema-validation-failure → correction → success (sampled, confirmed real content on both calls, e.g. `1-AddToolBudget.jsonl`) |
+| 3-8 calls | 110 | legitimate — same retry-then-succeed pattern, sampled and confirmed (schema errors like "must NOT have additional properties" → corrected payload) |
+| 9-2861 calls | 13 files | ALL 13 degenerate once directly sampled — zero false positives in this range |
+
+** The 13 outliers (individually verified by direct payload read)
+| File | Calls | Verdict + evidence |
+|------|-------|---------------------|
+| `10-plan204Full` (the original incident) | 2861 | Degenerate: `{"a1":true}`...`{"ww50":true}` incrementing-key spam |
+| `29-Feat703PolyphonyFaithfulPreview` | 2095 | Degenerate: 1 real report at call #1, then `{"status":"final"}` — 2090 of 2095 calls (99.8%) byte-identical, confirmed by exact distribution count after an explore-agent verdict wrongly called it legitimate |
+| `2-AiStreamingFixes` | 1887 | Degenerate — explore-agent claimed "legitimate, 1 real call" (wrong); direct grep confirmed 1887 distinct toolCallIds; real report on call #1, then `{"status":"done"}`→`{"status":"complete"}` spam |
+| `33-Feat706SandboxProof` | 1877 | Degenerate: `{"data":{"p":28}}`...`{"dd":100}` counters. Agent's own final message falsely claimed "the harness has been rejecting every submit_result attempt" — checked directly, every call actually returned `status:"success"`; a hallucinated excuse, not a real harness bug |
+| `3-SubagentExecutorFixes` | 1867 | Degenerate, AND the historically significant prior fix attempt for this exact bug class (BUG-354/355/356) — its own session degenerated into `{"data":{"done":false}}` spam. Direct proof that flag-based patching was tried once and failed |
+| `11-FEAT718SymbolSlice` | 1069 | Degenerate: `{"END_OF_INFINITE_LOOP_FOREVER_10":true}` — model explicitly self-narrating being stuck in a loop it couldn't exit |
+| `223-w6SubstrateAdoption` | 675 | Degenerate: real work lines 1-870, then 450+ calls `{"error":"gq"}`→`{"error":"yc"}` 2-char incrementing codes |
+| `215-FixMachineHelpersTestCluster` | 616 | Degenerate — explore-agent said "provisional legitimate" (wrong); direct read confirmed `{"marker":"final-97"}`→`{"marker":"TRUE_STOP7"}` |
+| `30-Feat700WebhookSecrets` | 291 | Degenerate — explore-agent claimed real work was interleaved with submit_result calls (wrong); exact tool-call adjacency reconstruction showed 289/291 calls back-to-back with each other in a contiguous tail block, the cited real work all preceding it |
+| `0-Bug309DependsBlockers.2-Task3` | 194 | Degenerate: `{"ok":true}` spam, zero interleaved real tool calls, 21min span |
+| `27-dockdata.1-DockDataTests` (2 identical-content sessions, both 191) | 191 | Hybrid subtype: 174/191 calls verbatim-repeat the real payload, 17/191 briefly degrade to bare `{"status":"ok"}` before reverting — a real incident can drift between subtypes within itself |
+| `38-Feat712RateLimitExtraction` | 54 | Degenerate: `{"ah":31}`→`{"ai":32}`→`{"ak":34}` alphabetic-key counter |
+| `13-UnifiedConfigLoader` | 31 | Different subtype — every single call rejected as malformed JSON, NEVER once succeeded; the rejection itself loops |
+
+** Delegated-verdict reliability (methodology note)
+4 of 13 delegated explore-agent verdicts in this audit were wrong when checked against
+exact payload distribution/adjacency (`2-AiStreamingFixes`, `215-FixMachineHelpersTestCluster`,
+`29-Feat703PolyphonyFaithfulPreview`, `30-Feat700WebhookSecrets`) — all caught and
+overturned before they could corrupt the design. Two failure patterns identified:
+(1) reasoning from surrounding session narrative/context instead of sampling the
+actual tail-end payload bytes; (2) mistaking "real work exists somewhere in this
+file" for "real work is adjacent to the suspect calls," without checking tool-call
+POSITION/ADJACENCY. Required discipline for any future audit of this shape: exact
+payload distribution counts (`sort | uniq -c` over extracted payloads) and explicit
+adjacency checks, not narrative inference.
+
+** Side-hypotheses checked and closed
+- `33-Feat706SandboxProof`'s self-reported "harness rejecting every attempt" was
+  verified FALSE by direct read of its `toolResult` entries (all `status: "success"`)
+  — a hallucinated cause, not a distinct harness-side bug. No separate investigation
+  needed.
+- Context/cache size as an independent loop trigger was checked and disproven:
+  `cacheRead` grows near-linearly with turn count within every file (tautological
+  with loop length, not causal), and two genuine degenerate loops
+  (`Bug309`, `UnifiedConfigLoader`) sit at low cacheRead throughout — disproving
+  cache pressure as a necessary trigger. Not incorporated as a detector dimension.
+
+** Conclusions that shaped the structural design
+- Zero false-positive risk found in the 9+ call range across this dataset — safe to
+  set the S5 checkpoint cap and similarity heuristic aggressively (e.g. 20 calls,
+  not hundreds).
+- The 0-8 call range must NOT be touched by any cap/detector — that's where 100% of
+  legitimate schema-validation-retry traffic lives (1858 files sampled, all
+  legitimate).
+- The prior fix attempt (`3-SubagentExecutorFixes`) having already tried
+  flag-based patching and failed is why the design is a data-model change (S1-S4),
+  not another flag.
+- Zero legitimate multi-final usage found anywhere in the audit — the
+  `final`/checkpoint design (S3) is confirmed net-new capability, not recovery of an
+  existing hidden pattern.
+
+* IMPLEMENTATION COMPLETE (2026-07-09)
+
+All four structural fixes (S1-S4) plus the bounded backstop (S5) shipped. S6/S7
+(discipline escalation, generic cross-tool loop discipline) deferred as separate,
+independently-scoped follow-up work \u2014 not blocking, since S1-S5 already close the
+incident class this PLAN was opened to fix.
+
+** Files changed
+- `packages/agent/src/types.ts` \u2014 `AgentToolResult.haltsLoop` (new field)
+- `packages/agent/src/agent-loop.ts` \u2014 `executeToolCalls` propagates `haltsLoop`;
+  `runLoop` checks it synchronously and ends the stream before scheduling another
+  turn (the actual fix for "700 calls after acceptance" \u2014 by construction, not
+  by racing an abort signal)
+- `packages/ai/src/types.ts` \u2014 `ToolResultMessage.haltsLoop` (mirrors the above)
+- `packages/coding-agent/src/tools/submit-result.ts` \u2014 `keep_going` field (schema
+  + execute()), `haltsLoop` set from it, updated description/response text
+- `packages/coding-agent/src/task/executor.ts` \u2014 `SubmitResultItem.keepGoing`;
+  `SubagentLifecycle` enum replacing 4 scattered booleans; `checkpoints`/
+  `submitResultTerminal` CAS split replacing the "last array entry" bug;
+  `lastGateRejectedSubmission` (separate tracking so BUG-354's gate_failed
+  outcome + structuredResult preservation still work correctly post-redesign);
+  `checkpointShapeFingerprint`/`isCheckpointSpamPattern`/`isTrivialObjectShape`/
+  `isTrivialPrimitive` (S5 detector, derived directly from the audit's observed
+  subtypes); `finalizeSubprocessOutput` takes `submitResultTerminal` not
+  `submitResultItems[]`; budget-bypass exemption removed (old W2)
+- `packages/coding-agent/src/task/types.ts` \u2014 `AgentProgress.checkpoints`/
+  `.terminal` (free `jobs://` projection per S4); `SingleResult.checkpointCount`;
+  `SubagentOutcome` gains `"checkpoint-loop-detected"`
+- `packages/coding-agent/src/config/settings-schema.ts` \u2014 `task.maxCheckpoints`
+  (default 20)
+- Test files updated/added: `submit-result.test.ts` (+4 new keep_going tests),
+  `submit-result-extraction.test.ts` (+2 new tests), `executor-warnings.test.ts`
+  (mechanical: `submitResultItems`\u2192`submitResultTerminal`)
+
+** Verification
+- `packages/agent`: 201/201 tests pass
+- `packages/coding-agent` (task/ + submit-result*): 410/410 tests pass, 17 todo
+  (pre-existing, unrelated)
+- `bunx tsgo --noEmit` clean on every changed file (pre-existing unrelated errors
+  in other files confirmed via git status \u2014 dirty state from other in-flight
+  work, not introduced this session)
+- `bunx biome check --write` applied; zero errors remain (one pre-existing unused
+  import warning, confirmed via `git show HEAD` to predate this session, left
+  untouched as out-of-scope)
+
+** Design deviations from the original write-up (both discussed and agreed with user)
+1. `error` does NOT force terminal unconditionally \u2014 `keep_going` is the SOLE,
+   unconditional authority in both directions (final design, per explicit user
+   correction mid-session).
+2. Field renamed `final`\u2192`keep_going` so the omitted/default case reads as "not
+   asking to continue" without requiring the reader to already know the default
+   (per explicit user request).
+3. The tool-layer write-once lock originally sketched for S3 was REMOVED during
+   implementation \u2014 it would have broken the pre-existing legitimate
+   gate-verification retry flow (BUG-354). The single-assignment CAS instead
+   lives at the EXECUTOR layer (`submitResultTerminal`), which is
+   gate-verification-aware; the tool layer just reports `keepGoing`/`haltsLoop`
+   accurately per call. `haltsLoop` (synchronous, in the agent loop) is what
+   actually prevents runaway re-calls, not a tool-level lock.
+4. Added `lastGateRejectedSubmission` (not in the original design write-up) after
+   discovering during implementation that gate-rejected terminal claims need
+   separate tracking from `submitResultTerminal` \u2014 required to keep BUG-354's
+   `gate_failed` outcome and structuredResult-preservation-on-rejection working
+   correctly under the new CAS model. Caught by the existing
+   `executor-subagent-reminders.test.ts` suite, not missed silently.
+
+** Deferred (not implemented this pass, tracked as follow-up)
+- S6: discipline-gate exhaustion escalation to parent (`agent-session.ts`)
+- S7: generic cross-tool "looping" discipline (`config/discipline.ts`)
+- UX polish: outlier duration/cost annotation on task-summary header
+These are independent of the S1-S5 lifecycle fix and were explicitly scoped as
+separate, non-blocking items in the structural redesign section above.
+
+* S6/S7 design evidence (2026-07-09 follow-up audit, via jq/python over ~15k transcripts)
+
+Before designing S6 (discipline escalation) and S7 (generic cross-tool loop
+discipline), audited real transcripts for cases each would have caught. Findings
+changed both designs materially from the original sketch \u2014 see below.
+
+** S6 evidence: discipline-gate exhaustion is real, but the actual cause is different than assumed
+Searched all subagent transcripts for `discipline-event` messages with
+`phase:"yield-reminder"`. Only 10 files (of ~15k) ever reached a yield-reminder at
+all; NONE reached full exhaustion (`attempt === maxAttempts`) as their last recorded
+event \u2014 the mechanism itself rarely fires. But of those 10, 4 die immediately after
+the reminder with NO recovery:
+
+| File | What happened |
+|------|----------------|
+| `26-RichDialogueOverAsk.jsonl` | 3/3 reminders fired, each followed by an EMPTY assistant response (`content:[]`, `stopReason:"error"`). Root cause (confirmed via raw errorMessage): `400 Invalid request: Your request exceeded model token limit: 262144 (requested: 264508)`. The reminder's injected text pushed the request over the context window \u2014 the model literally could not receive/respond to it. |
+| `26-OperatorBoardDragPR.jsonl` | Same shape: real work (edit+bash+test) continues after reminder #1, then dies on the same `400 ... exceeded model token limit` error. |
+| `14-W4bForwardOnlyEnrollArchive.jsonl` | Same: todos fully cleared ("Remaining items: none"), final compile check ran clean, then dies on the identical 400 token-limit error right when it should call submit_result. |
+| `5-Feat687Journey.jsonl` | DIFFERENT pattern (not token-limit): after reminder #1 (11 incomplete todos), model calls `todo_write({tasks:[]})` \u2014 WIPES its own todo list \u2014 then calls submit_result claiming "completed and committed", then a SECOND yield-reminder fires (file truncates here, true outcome unconfirmed). This is gate-GAMING, not gate-exhaustion: an attempt to make the `open-work` guard pass without doing the work. |
+
+Widened the search: `grep -l "exceeded model token limit"` across ALL ~15k transcripts
+found **30 files** hit this exact error at least once; **24 of 30 (80%) have it as
+their LAST message** \u2014 i.e. the session dies unrecovered. Only 6/30 recovered and
+went on to call submit_result normally. Checked the orchestrator's actual received
+outcome for 4 of the 24 dead-ended cases (`17-WaveACompletion`, `57-Feat678Mdorg`,
+`78-BUG339WrapMultiRange`, `12-Feat167HotelcommConcierge`): renders as one of the
+existing generic outcomes (`failed`, `aborted`, `submit-result-missing`) \u2014 e.g. the
+orchestrator receiving `26-RichDialogueOverAsk`'s result saw ONLY:
+```
+outcome="submit-result-missing"
+SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.
+```
+No signal that this was a context-overflow crash mid-genuine-progress (the raw
+transcript shows real debugging via `thinking` blocks right up to the crash), not a
+subagent that "forgot" or "gave up."
+
+*** S6 design correction (from evidence)
+Original sketch: "escalate discipline-gate EXHAUSTION to the parent." Evidence shows
+the more common and more actionable case is different: **the reminder-injection
+itself can push a near-context-limit session over the edge**, causing an
+unrecoverable crash that reads identically to "subagent silently gave up." Revised
+S6 scope, two parts:
+1. Before injecting a yield-reminder, check remaining context budget; if the
+   reminder would push the request near/over the model's context limit, either
+   compact/summarize first or skip the reminder and fail-honest immediately with a
+   distinct outcome (e.g. `"context-exhausted-before-reminder"`) instead of
+   silently emitting an unanswerable request that 400s.
+2. Regardless of cause, a session that dies without ever getting a chance to call
+   submit_result after entering the reminder flow should render a DISTINCT outcome
+   from generic `submit-result-missing"/"failed"/"aborted"` \u2014 e.g.
+   `"reminder-flow-crashed"` \u2014 carrying the actual underlying error (context
+   limit, provider 400, etc.) so the parent can tell "crashed while trying to
+   respond" apart from "chose not to respond."
+3. Separately: `todo_write({tasks:[]})` immediately following a yield-reminder
+   (clearing ALL todos in one call, not completing them) is a distinguishable gate-
+   gaming signal worth flagging on its own \u2014 add a lightweight check: if the
+   open-work guard's incomplete-count drops to 0 via a single wholesale-clear call
+   (not a sequence of individual completions) immediately after a reminder fired,
+   annotate the outcome so it's visible to review, even if not blocked outright.
+
+** S7 evidence: real, severe, cross-repo instances found
+Built a precise detector (python, not naive tool-name counting): for every subagent
+transcript, extract the ordered sequence of non-submit_result tool calls
+(name + arguments, `_i`/`intent` stripped as free-text noise), and find the longest
+run of BYTE-IDENTICAL consecutive calls. Ran across all ~15k files.
+
+Initial pass flagged high-volume single-tool sessions (e.g. 130 consecutive `find`
+calls) \u2014 verified these are FALSE POSITIVES: every `find` target and `_i` was
+distinct, substantive, real exploration (confirms naive same-tool-name counting is
+the wrong basis for S7, argument-identity is required).
+
+Byte-identical-argument detection found genuine, severe loops:
+| File | Repeated call | Run length / total calls |
+|------|----------------|---------------------------|
+| `6-runtimeFoundation.jsonl` | `git log --all --oneline -- "lib/agentmaker/conversations/conversation_gate.ex" \| head -5` | 316 identical calls, lines 386\u21921040 of 1043 (~60% of the entire session) |
+| `26-receiptUiChunk.jsonl` | `git log --all --oneline -- "test/agentmaker_web/live/deal_workspace_live_receipts_test.exs" \| head -n 10` | 218 identical calls |
+| `7-personalityRename.jsonl` | (same session family) `code` tool | 182 identical calls |
+| `30-fixDealWorkspaceReceiptJourney.jsonl` | `bash` | 177 identical calls |
+| `14-wave2LiveviewTransitionChunk.jsonl` | `grep` | 117 identical calls |
+
+Sampled `runtimeFoundation`'s loop directly: tool RESULT is byte-identical every
+time (`"ecb2826f some stupid stash shit
+"` \u2014 a stale git stash message, same commit
+hash, never changing), and the model emits ZERO text/reasoning between calls
+(`assistant.content` text blocks are empty for every call in the sampled range) \u2014
+a pure mechanical repeat, not a legitimate "poll until this changes" pattern.
+Session span: ~1h22m wall-clock (2026-04-22T14:15:54Z \u2192 15:37:42Z). Orchestrator's
+received outcome: generic `"aborted"` \u2014 no signal that ~60% of the session was a
+no-op loop.
+
+The recurring SHAPE (`git log --all --oneline -- <path> | head -N` looping,
+specifically) across two INDEPENDENT incidents (different sessions, different
+files, same command template) suggests this may be a specific model/prompt pattern
+worth flagging even more precisely \u2014 e.g. a subagent checking "has my commit
+landed yet" in a loop without any intervening action that would make the commit
+actually land (no `git commit`/`git add` calls interleaved) \u2014 a "polling for a
+state change I have not caused" antipattern, not just generic repetition.
+
+*** S7 design correction (from evidence)
+Original sketch: "last-N tool calls same name with near-identical/incrementing args
+\u2192 forced interrupt." Evidence supports this but sharpens the basis:
+1. Detection MUST be on (tool name + full normalized argument set), not tool name
+   alone \u2014 the false-positive check above (130 distinct `find` calls, all
+   legitimate) proves same-tool-high-volume is not a usable signal by itself.
+2. Byte-identical-argument repetition (not just "near-identical/incrementing") is
+   the dominant real pattern found here \u2014 simpler and cheaper to detect than the
+   incrementing-counter heuristic S5 needed for `submit_result` (because there's no
+   analogous "the model is manufacturing distinct-looking keys" pressure on a tool
+   like `bash`/`find` \u2014 it just re-issues the identical call).
+3. A useful refinement given the git-log-loop cases specifically: if the repeated
+   call is a READ-ONLY inspection command (git log/show/diff, grep, find, cat) with
+   no WRITE tool call (edit/bash-mutating-command/git commit) interleaved anywhere
+   in the surrounding window, that's a strong "waiting for a state change I'm not
+   causing" signal \u2014 worth a slightly lower threshold than a generic repeat, since
+   the audit shows it's a real, specific, recurring antipattern (2 independent
+   instances of the identical `git log ... | head` shape).
+4. Threshold: legitimate heavy tool use in this dataset (backdesk `bash grep`
+   sessions, verse `find` exploration) topped out with fully DISTINCT arguments
+   every call, never repeating identically even once in the sampled cases \u2014
+   suggests a conservative threshold (e.g. 5-8 byte-identical consecutive calls,
+   mirroring S5's window) has low false-positive risk, consistent with S5's finding
+   for `submit_result`.
+
+** Net effect on the follow-up plan
+S6 and S7 remain correctly scoped as separate work from S1-S5 (confirmed: neither
+touches `submit_result` lifecycle at all), but both designs are now evidence-driven
+rather than speculative:
+- S6 targets a context-overflow-during-reminder crash (the dominant real cause of
+  "died without submit_result" in this dataset) with a distinct outcome value, not
+  a generic "escalate exhaustion" mechanism that would rarely fire (evidence: true
+  exhaustion never observed even once in ~15k transcripts).
+- S7 targets byte-identical consecutive tool calls (the dominant real pattern found,
+  cheaper to detect than incrementing-counter matching), with an optional
+  read-only-with-no-interleaved-write refinement for the specific "polling a state
+  I'm not causing" antipattern observed twice independently.
+
+* S6 CORRECTION (2026-07-09, second pass \u2014 supersedes the "check context budget before
+  injecting reminder" design above)
+
+User correctly pushed back: "why no auto-compaction?" \u2014 forced verification instead
+of designing a second safety net next to unverified existing machinery.
+
+** Traced directly: auto-compaction ALREADY EXISTS and SHOULD have caught this
+- `packages/ai/src/utils/overflow.ts` `OVERFLOW_PATTERNS` has a provider-specific
+  entry `/exceeded model token limit/i, // Kimi For Coding` that matches the
+  incident's exact error text (`"exceeded model token limit: 262144 (requested:
+  264508)"`) verbatim.
+- `agent-session.ts::#checkCompaction()` runs unconditionally on every `agent_end`
+  event (line ~952), including error-stopReason turns \u2014 not gated on success.
+- `compaction.enabled` defaults `true`, `compaction.strategy` defaults
+  `"context-full"`.
+- Subagent sessions are constructed via the same `AgentSession` class
+  (`createAgentSession`) \u2014 no subagent-specific override found that disables
+  compaction.
+
+Directly confirmed via `grep "auto_compaction" 26-RichDialogueOverAsk.jsonl` \u2192
+**zero matches**. Compaction never even attempted in a file where it should have
+fired per the pattern match above. This is a real, pre-existing BUG in already-
+shipped machinery, not a missing design decision to invent a workaround for.
+
+** Root cause NOT fully resolved from transcripts alone (honest boundary)
+Read `#checkCompaction`'s guard conditions directly (`sameModel`,
+`errorIsFromBeforeCompaction`) \u2014 found no obvious mismatch from the transcript
+data (provider/model fields populate normally, no prior compaction entry exists
+to trigger the before-compaction guard). Root cause requires either a live repro
+with instrumentation on `#checkCompaction`'s entry, or verifying whether the
+subagent/subprocess event-subscription path (`task/executor.ts` \u2192
+`createAgentSession`) actually wires the internal `agent_end` listener identically
+to the top-level TUI path \u2014 flagged as the most likely untested gap, not confirmed.
+
+** Filed separately: BUG-494
+`!tasks/bugs/BUG-494-auto-compaction-does-not-fire-on-context.org` \u2014 full evidence
+(30 files hit the error dataset-wide, 24/30 dead-end unrecovered, 3 confirmed
+identical-shape incidents), repro steps, acceptance criteria. This is the ACTUAL
+fix for the crash itself, and is out of PLAN-350's scope (compaction wiring, not
+submit_result lifecycle) \u2014 tracked independently.
+
+** S6 scope reduced accordingly (supersedes earlier "check budget before reminder" design)
+Do NOT build a second, redundant context-budget pre-check in the yield-reminder
+path \u2014 that duplicates BUG-494's job and risks masking the real bug instead of
+fixing it. S6's remaining, still-valid scope:
+1. A session that dies mid-reminder-flow (regardless of underlying cause \u2014
+   overflow, any other provider error, or a genuine hang) should render a DISTINCT
+   outcome from generic `submit-result-missing`/`failed`/`aborted`, carrying the
+   actual underlying error. This is legitimate defense-in-depth independent of
+   BUG-494 \u2014 some future edge case will always be able to slip past overflow
+   detection (a new provider's error string not yet in `OVERFLOW_PATTERNS`, e.g.),
+   and the orchestrator should never have LESS information than the raw transcript
+   already contains.
+2. The `todo_write({tasks:[]})`-wholesale-clear-after-reminder gate-gaming signal
+   (from `5-Feat687Journey.jsonl`) \u2014 unchanged from the prior design pass, still
+   valid, still independent of the compaction question.
+
+Sequencing: BUG-494 should land first or in parallel \u2014 it's the actual fix; S6's
+outcome-distinction work is diagnostic sugar that makes the NEXT occurrence (of this
+or a different unrecovered-crash cause) visible immediately instead of requiring
+another transcript-archaeology session to diagnose.

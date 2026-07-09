@@ -260,6 +260,16 @@ export interface AgentToolResult<T = any, _TInput = unknown, D = unknown> {
 	// True when the tool surfaced an error to the model. Aggregators can read this
 	// to short-circuit subsequent operations or roll back transactional batches.
 	isError?: boolean;
+	// True when this tool call is TERMINAL for the agent loop: the loop must not
+	// issue another model turn after this result lands, even though the assistant
+	// message that triggered it contained a tool call (which normally always means
+	// "keep going"). This is a synchronous, structural halt checked by `runLoop`
+	// immediately after the tool result is recorded — NOT an async abort signal
+	// raced against the next turn. Used by terminal-result tools (e.g.
+	// `submit_result` accepting a non-continuing submission) to make "the model
+	// regains a turn after this call" inexpressible, rather than merely
+	// discouraged. Absent/false ⇒ ordinary continue-the-loop behavior.
+	haltsLoop?: boolean;
 }
 
 // Callback for streaming tool execution updates
