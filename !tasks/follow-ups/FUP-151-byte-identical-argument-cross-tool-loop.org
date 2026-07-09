@@ -1,0 +1,113 @@
+#+TITLE: Byte-identical-argument cross-tool loop detector for subagents
+#+STATE: ITEM
+#+SESSION_ID: 1528e03fce2f96b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-09T09-53-13-016Z_1528e03fce2f96b4.jsonl]]
+#+CUSTOM_ID: FUP-151-byte-identical-argument-cross-tool-loop
+
+* Initial Message
+
+ok so what's your final work roster
+
+#+FILETAGS: :coding-agent:task:executor:observability:
+
+* Origin
+Design-complete scope of PLAN-350 (S7), split out to its own FUP. S1-S5
+(the submit_result-specific structural fix) already shipped, commit
+c1eaba6af. S7 is a structurally different, generic problem \u2014 loops on
+ANY tool, not just submit_result \u2014 and needs its own detector, own
+acceptance criteria, and its own implementation pass. Full evidence trail
+lives in `!tasks/plans/PLAN-350-subagent-submit-result-termination-gap-l.org`.
+
+* Problem
+Nothing today detects a subagent stuck looping on a non-submit_result
+tool (`bash`, `find`, `edit`, `git`, etc). Unlike submit_result, there is
+no natural terminal/checkpoint split to hang detection off \u2014 a `bash`
+call is just a `bash` call every time.
+
+* Evidence (from direct transcript investigation \u2014 verified, not inferred)
+
+** False positive ruled out first (shaped the design)
+First pass: counted repeated TOOL NAMES. Top hit was 130 consecutive
+`find` calls in one session. Checked the actual arguments \u2014 every call
+had a DIFFERENT target and a different stated intent (`_i` field). This
+was genuinely deep, legitimate code exploration, not a loop. Name-based
+counting would have false-positived on this. \u2192 detection basis MUST be
+argument-identity, not tool-name-volume.
+
+** Real incidents found (argument-identity detector, byte-identical match)
+- `6-runtimeFoundation.jsonl`: `git log --all --oneline -- "lib/agentmaker/conversations/conversation_gate.ex" | head -5`
+  called 316 times in a row, spanning ~60% of a 1043-line, 1h22m session.
+  Tool RESULT was byte-identical every single call (stale git-stash
+  message, same hash, never changing). Assistant reasoning/text between
+  calls was EMPTY every time \u2014 verified by direct sampling, not
+  inferred from call count alone.
+- `26-receiptUiChunk.jsonl`: `git log ... | head -n 10` (different repo
+  file, same command template) called 218 times in a row \u2014 independent
+  recurrence of the same antipattern shape in a different session.
+- Both incidents: orchestrator's outcome for the dispatch was a generic
+  `"aborted"`, with zero signal that 60%+ of the session was a dead-weight
+  repeat loop.
+- Sub-signal found in both: the looped command was READ-ONLY (`git log`,
+  inspection) with NO interleaved write anywhere nearby (no `git commit`,
+  no `edit`) \u2014 i.e. the subagent was polling "has my change landed yet?"
+  without ever doing anything that would make it land. This recurred
+  independently twice with the identical command SHAPE (`git log ... |
+  head`), worth a distinguishable, slightly-lower-threshold sub-flag.
+- Threshold justification: every legitimate heavy-tool-use session
+  sampled had ZERO identical-argument repeats, even once. Every real
+  incident found was in the hundreds. No borderline cases observed in
+  this sample \u2014 a conservative threshold (5-8 consecutive identical
+  calls, mirroring S5's window) carries effectively no observed
+  false-positive risk.
+
+* Design
+1. Detector keys on (tool name + full byte-serialized argument set), NOT
+   tool name alone \u2014 direct consequence of the 130-call false positive.
+2. Byte-identical match is sufficient \u2014 do NOT need S5's fuzzy/evolving-
+   shape matching (S5 had to handle a model deliberately varying payload
+   shape, `{"a1":true}` \u2192 `{"ww50":true}`, to dodge a perceived dedup
+   check). Neither real S7 incident showed evasion behavior \u2014 the model
+   just reissued the exact same command. Simpler detector suffices for
+   what's actually been observed; revisit only if a fuzzy-evasion case is
+   found later.
+3. Track consecutive identical (name, args) tool calls per subagent
+   session. At threshold (5-8, see justification above), flag as a loop.
+4. Sub-signal: when the looped call is read-only/inspection-shaped (e.g.
+   matches a denylist/heuristic for `git log`, `git status`, `find`,
+   `grep`-class calls) AND no write-shaped tool call (`edit`, `git commit`,
+   `bash` with a mutating verb) has occurred in the surrounding window,
+   tag it distinctly as "read-only polling without interleaved write" \u2014
+   this is the more specific, still-verified antipattern from both real
+   incidents, worth its own signal separate from a generic loop flag.
+5. Surface a distinct `SubagentOutcome` (not generic `"aborted"`) when a
+   loop is detected, carrying: the repeated tool+args, the repeat count,
+   and whether the read-only-polling sub-signal applied.
+
+* Non-goals
+- NOT reusing S5's shape-fingerprint/evolving-payload detector wholesale
+  \u2014 different problem shape (byte-identical vs. evolving-but-trivial),
+  simpler mechanism suffices per the evidence above.
+- NOT flagging on tool-name repetition alone \u2014 directly falsified by the
+  130-call `find` false positive.
+- NOT scoped to `submit_result` \u2014 this is explicitly the generic,
+  cross-tool case S1-S5 does not cover.
+
+* Acceptance criteria
+1. A synthetic/replayed transcript fixture matching the
+   `6-runtimeFoundation.jsonl` shape (200+ byte-identical `git log`
+   calls, no interleaved write) is flagged as a loop with the read-only-
+   polling sub-signal set.
+2. A synthetic/replayed fixture matching the legitimate 130-call `find`
+   session (distinct targets each call) is NOT flagged.
+3. A synthetic fixture with a small number (under threshold) of
+   legitimate identical retries (e.g. a flaky command retried 2-3 times
+   with unchanged args, a normal pattern) is NOT flagged \u2014 threshold
+   must sit above realistic legitimate-retry counts, not just above zero.
+4. Orchestrator-visible outcome for a detected loop is distinct from
+   generic `"aborted"`/`"failed"`, carrying the repeated call + count.
+
+* Related
+- PLAN-350 (`!tasks/plans/PLAN-350-subagent-submit-result-termination-gap-l.org`)
+  \u2014 S1-S5 (submit_result-specific fix) shipped, commit c1eaba6af. This
+  FUP is S7, the generalized cross-tool follow-up, explicitly deferred
+  from that implementation pass since it is a different mechanism.

@@ -1,0 +1,25 @@
+#+TITLE: desktop-session-window-identity--stamp-a
+
+** ITEM Desktop session→window identity: stamp-and-join, don't guess
+:PROPERTIES:
+:CUSTOM_ID: CON-desktop-session-window-identity--stamp-a
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-03T13:27:58Z
+:END:
+:RELATIONS:
+:END:
+Problem class: a process (spell session) needs its state shown on its compositor window (niri) in a bar (DMS). Naive approach: the producer GUESSES which window it owns (focused-window, or process-ancestry pid match) and bakes that id into its output. Both guesses are ambiguous and race:
+- focused-window: burst launches race on focus (off-by-N). `spell recover --direct` spawns ~24 windows at once = worst case.
+- process-ancestry: ghostty runs as a SHARED SERVER — one pid backs many windows (measured 3769→15 windows) — so pid match collapses and falls back to focus. Same race one layer down.
+
+Correct architecture — INVERT: producer stamps an identity it OWNS onto a channel the compositor echoes, consumer joins live.
+- spell owns its window TITLE (OSC-2); niri echoes it verbatim as windows[].title. Stamp `⟨<sessionId>⟩` there.
+- Live consumer (DMS bar): for each live window, parse token → look up session state → render on window's live workspace_id. Mapping DERIVED every poll, never stored → immune to focus/launch-order/pid-sharing/id-reuse.
+- Snapshot-only case (recover a crashed session whose window is gone): resolve last workspace by the SAME token self-join at runtime, store just that.
+
+Principle: derive live what you can; store only what you can't re-derive. Keying the file by session id (stable) not window id (transient) removes retarget/self-heal/ghost-file machinery entirely — nothing to heal when identity is never guessed.
+
+Migration without flag-day: consumer joins token-primary with legacy-key fallback, so old still-running producers keep working until restart.
+
+Files (spell repo): title-generator.ts (setSessionTitleToken), interactive-mode.ts (wire early), desktop-common/status-file.ts (key by sessionId), niri/niri-query.ts (resolveWorkspaceByToken), niri/controller.ts (no timer), recover.ts (token in spawn title). Consumer: dotfiles wm/quickshell/dms/Services/SpellStatusService.qml. Commits: spell dc0601b95, dotfiles cdadc4b.

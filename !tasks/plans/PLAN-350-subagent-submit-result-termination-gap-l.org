@@ -619,3 +619,16 @@ Sequencing: BUG-494 should land first or in parallel \u2014 it's the actual fix;
 outcome-distinction work is diagnostic sugar that makes the NEXT occurrence (of this
 or a different unrecovered-crash cause) visible immediately instead of requiring
 another transcript-archaeology session to diagnose.
+
+* S6/S7 filed as follow-ups (2026-07-09)
+Both design-complete, evidence-backed sections above are now tracked as
+their own FUPs \u2014 implementation deferred out of this PLAN's scope (S1-S5
+already shipped, commit c1eaba6af):
+- S6 (outcome-distinction for reminder-flow crashes, gate-gaming flag) \u2192
+  `FUP-150-distinct-outcome-for-subagent-sessions-t`
+- S7 (byte-identical-argument cross-tool loop detector) \u2192
+  `FUP-151-byte-identical-argument-cross-tool-loop`
+
+This PLAN's remaining open item is BUG-494 (auto-compaction non-fire),
+tracked independently since it is compaction-wiring, not submit_result
+lifecycle \u2014 not owned by this PLAN, just discovered during its S6 audit.

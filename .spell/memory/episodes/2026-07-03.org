@@ -1,0 +1,13 @@
+#+TITLE: Episodes 2026-07-03
+
+** ITEM Invert session→window identity: title-token join (fix DMS state mismatch)
+:PROPERTIES:
+:CUSTOM_ID: EP-8bc8ffb8c84780d5
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-03T13:27:25Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-349-invert-sessionwindow-identity-title-toke
+:END:
+Shipped. spell commit dc0601b95, dotfiles commit cdadc4b. niri 82 pass, desktop-common 31 pass, both typecheck clean. Producer↔consumer token contract verified end-to-end. D3 interim repair applied to live sessions (9/10 fixed without restart). Pre-existing unrelated coding-agent typecheck errors (mcp/kdl-server-resolver, tools/await-tool, some tests) left untouched.

@@ -1,0 +1,96 @@
+#+TITLE: Distinct outcome for subagent sessions that crash mid yield-reminder flow
+#+STATE: ITEM
+#+SESSION_ID: 1528e03fce2f96b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-09T09-53-13-016Z_1528e03fce2f96b4.jsonl]]
+#+CUSTOM_ID: FUP-150-distinct-outcome-for-subagent-sessions-t
+
+* Initial Message
+
+ok so what's your final work roster
+
+#+FILETAGS: :coding-agent:task:executor:observability:
+
+* Origin
+Design-complete sub-scope of PLAN-350 (S6), split out to its own FUP after
+S6's original "add a context-budget pre-check before injecting the
+yield-reminder" design was found to duplicate already-shipped compaction
+machinery and was DROPPED in favor of BUG-494 (the actual auto-compaction
+non-fire bug). This FUP is the part of S6 that survives independently of
+whether/when BUG-494 lands \u2014 see PLAN-350's "S6 CORRECTION" section
+(`!tasks/plans/PLAN-350-subagent-submit-result-termination-gap-l.org`) for
+the full evidence trail this was derived from.
+
+* Problem
+A subagent session that dies immediately after a `finish-the-loop` /
+`open-work` yield-reminder is injected (for ANY underlying reason \u2014
+context overflow, a different provider error, a genuine hang) surfaces to
+the orchestrator as a generic outcome (`submit-result-missing` /
+`failed` / `aborted`) indistinguishable from every other failure shape.
+The orchestrator loses information the raw transcript already contains.
+
+Evidence (from the PLAN-350 S6 audit, 2026-07-09): of 10 transcripts that
+ever reached a yield-reminder, 4 died immediately after with no recovery.
+Widened search across ~15k subagent transcripts: 30 files hit
+`"exceeded model token limit"` (or equivalent overflow-class error) at
+least once; 24/30 (80%) have it as their LAST message \u2014 session dies
+unrecovered. ALL 24 were surfaced to the orchestrator with zero signal
+that (a) a yield-reminder had just fired, or (b) the underlying error was
+overflow-shaped rather than some other failure.
+
+One separate, distinct pattern was also found in this audit and belongs
+in this FUP's scope: `5-Feat687Journey.jsonl` \u2014 a subagent responded to
+a yield-reminder by calling `todo_write({tasks:[]})` (wiping its own
+todo roster) then claiming completion. This is gate-gaming, not
+exhaustion or a crash, and needs its own distinct flag \u2014 conflating it
+with a genuine reminder-flow crash would misdiagnose future incidents of
+this shape.
+
+* Design
+1. Track, at the executor layer, whether the LAST assistant turn in a
+   subagent session was immediately preceded by a yield-reminder
+   injection (the discipline/`finish-the-loop` mechanism already knows
+   when it injects one \u2014 this is a flag to thread through, not new
+   detection logic).
+2. If that session's terminal state is a crash/abort/missing-result, emit
+   a distinct `SubagentOutcome` value (e.g. `"reminder-flow-crashed"`)
+   carrying the actual underlying error message verbatim, instead of
+   folding into the generic `failed`/`aborted` bucket.
+3. Separately: detect the todo-wipe-after-reminder shape (a `todo_write`
+   call that empties a previously non-empty roster, occurring within N
+   turns of a yield-reminder, followed by a submit_result/completion
+   claim) and flag it as a distinct `"reminder-gate-gamed"` (or similar)
+   signal \u2014 do not merge with #2, the mechanism and remediation differ
+   (one is a crash to route to BUG-494-class investigation, the other is
+   a discipline-evasion pattern to route to prompt/discipline hardening).
+
+* Non-goals
+- NOT a context-budget pre-check before injecting the reminder \u2014 that
+  duplicates existing auto-compaction (`#checkCompaction`/
+  `#runAutoCompaction` in `agent-session.ts`), tracked separately as
+  BUG-494 if/when that machinery's non-fire is root-caused and fixed.
+  This FUP is diagnostic sugar layered OVER whatever the underlying
+  crash cause turns out to be \u2014 it does not try to prevent the crash.
+
+* Acceptance criteria
+1. A subagent transcript exhibiting the exact `26-RichDialogueOverAsk.jsonl`
+   shape (yield-reminder immediately followed by an unrecovered overflow
+   error) surfaces as `"reminder-flow-crashed"` (or equivalent named
+   outcome) to the orchestrator, with the raw error message attached \u2014
+   not generic `aborted`.
+2. A subagent transcript exhibiting the `5-Feat687Journey.jsonl` shape
+   (todo-wipe immediately after a reminder, followed by a completion
+   claim) surfaces as a distinct gate-gaming signal, separate from #1.
+3. Regression test using a synthetic/replayed transcript fixture for each
+   of the two shapes above, asserting the correct distinct outcome value.
+4. No change to existing outcomes for sessions that recover normally
+   after a yield-reminder (the common, non-degenerate case) \u2014 this is
+   additive labeling on the crash path only.
+
+* Related
+- PLAN-350 (`!tasks/plans/PLAN-350-subagent-submit-result-termination-gap-l.org`)
+  \u2014 S1-S5 implementation (submit_result lifecycle) already shipped,
+  commit c1eaba6af. This FUP is S6's surviving scope after the pre-check
+  design was dropped.
+- BUG-494 (`!tasks/bugs/BUG-494-auto-compaction-does-not-fire-on-context.org`)
+  \u2014 the actual root-cause bug for WHY these sessions crash in the first
+  place; independent, may land before or after this FUP.

@@ -1,0 +1,13 @@
+#+TITLE: Episodes 2026-07-05
+
+** ITEM Session retry backstop misses retryable Codex/network errors (server_error, 408, ECONNRESET, …)
+:PROPERTIES:
+:CUSTOM_ID: EP-65df0f3fe6b6cbcb
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-05T14:26:50Z
+:END:
+:RELATIONS:
+ABOUT: BUG-493-session-retry-backstop-misses-retryable
+:END:
+Fixed. Changes:

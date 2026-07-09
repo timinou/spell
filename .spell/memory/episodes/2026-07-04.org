@@ -1,0 +1,13 @@
+#+TITLE: Episodes 2026-07-04
+
+** ITEM MCP OAuth DCR client_id/client_secret discarded after login — breaks proactive refresh for DCR-only providers (Notion)
+:PROPERTIES:
+:CUSTOM_ID: EP-65bfb9d13a93192d
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-04T10:53:51Z
+:END:
+:RELATIONS:
+ABOUT: BUG-492-mcp-oauth-dcr-client-id-client-secret-di
+:END:
+Fixed. Changes:

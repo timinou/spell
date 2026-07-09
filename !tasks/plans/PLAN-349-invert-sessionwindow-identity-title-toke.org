@@ -1,8 +1,9 @@
 #+TITLE: Invert session→window identity: title-token join (fix DMS state mismatch)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 152064dca1c712bb
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-02T19-46-16-839Z_152064dca1c712bb.jsonl]]
 #+CUSTOM_ID: PLAN-349-invert-sessionwindow-identity-title-toke
+#+COMPLETION_HASH: 0413387721dc7307
 
 * Initial Message
 
@@ -107,3 +108,5 @@ Old sessions keep working unchanged until restarted; new sessions are robust.
   workspace (token-join replay vs live niri = 1:1).
 - Old running sessions still render (legacy fallback) until restarted.
 - Commit spell repo (user's call on dotfiles commit).
+
+NOTE [2026-07-03]: Shipped. spell commit dc0601b95, dotfiles commit cdadc4b. niri 82 pass, desktop-common 31 pass, both typecheck clean. Producer↔consumer token contract verified end-to-end. D3 interim repair applied to live sessions (9/10 fixed without restart). Pre-existing unrelated coding-agent typecheck errors (mcp/kdl-server-resolver, tools/await-tool, some tests) left untouched.

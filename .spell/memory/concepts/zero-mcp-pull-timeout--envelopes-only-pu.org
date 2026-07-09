@@ -1,0 +1,41 @@
+#+TITLE: zero-mcp-pull-timeout--envelopes-only-pu
+
+** ITEM zero MCP pull timeout: envelopes-only pull + on-demand unsub scan
+:PROPERTIES:
+:CUSTOM_ID: CON-zero-mcp-pull-timeout--envelopes-only-pu
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-04T21:51:26Z
+:END:
+:RELATIONS:
+:END:
+Repo: ~/code/personal/zero (babashka/Clojure inbox-zero MCP server over himalaya CLI).
+
+## Symptom
+zero MCP server timed out at the client's 30s tool budget. Handshake instant; hang entirely inside zero_pull.
+
+## Root cause (measured, not guessed)
+zero_pull -> triage/build-bare-plan read the FULL raw source of all ~200 inbox envelopes (one `himalaya message read` subprocess each, ~1.1s per IMAP fetch) JUST to extract the List-Unsubscribe header. 200 fetches @ conc16 = 35.3s > 30s.
+
+## Key measured facts (himalaya v1.2.0 + Gmail IMAP)
+- envelope list of 200 = 1 call, 1.3s (carries flags, from, subject, date — NOT List-Unsubscribe).
+- per-message read = ~1.1s regardless of body size.
+- himalaya `-H <header>` filters DISPLAY only, does NOT reduce IMAP fetch cost (header-only read == full-body read time). So a "header-only fetch" optimization is USELESS.
+- single bulk `message read id1 id2 ...` of 200 = 121s (himalaya fetches serially internally); `-o json` multi returns a concatenated STRING, not a delimited array — unusable.
+- concurrency scales SUBLINEARLY (16->48 conns = 1.27x, not 3x): Gmail throttles parallel connections.
+- CRITICAL: `message read --preview` (default) does NOT emit List-Unsubscribe on real mail (only From/To/Subject). Only `-H List-Unsubscribe` surfaces it — and as a BARE unwrapped URL or comma-separated `mailto:x, https://y`, NOT the RFC `<url>` form. The old eager extraction returned 0 hits on real mail; it only ever "worked" against the fake test harness whose :headers embeds the header. The fake harness masked a real correctness bug.
+
+## Fix (BUG-003)
+- Dropped A (header-only fetch — measured useless).
+- C (real fix): zero_pull/build-bare-plan fetch ENVELOPES ONLY (~1.9s live), :unread derived from flags. List-Unsubscribe hints resolved on-demand by a NEW zero_scan_unsub {ids?} tool -> triage/scan-unsub -> himalaya/read-unsub-headers (`-H List-Unsubscribe`, bounded-concurrent, scoped to ids the agent cares about) -> engine/merge-unsub writes :has-unsubscribe/:unsubscribe-via/:via into the IR.
+- B: *read-concurrency* 16->48.
+- Parser hardened: unsub-links handles angle-bracketed, bare, and comma-separated forms; unsubscribe-target reads the header line only (no body-link false positives).
+- Latent apply bug fixed: apply-action :unsubscribe reads :via which the MCP path never populated; scan/merge now write :via.
+
+## Results
+zero_pull 35.3s -> 1.9-2.0s live (15x margin). scan_unsub 20 ids = 3.1s, correctly finds unsub links (was 0). bb test 47 tests/206 assertions green.
+
+## Lessons
+1. Live-test against real data — the fake harness embedded List-Unsubscribe in a way real himalaya never returns, hiding a 0-hit bug.
+2. Measure the assumed optimization before building it (`-H` header-only fetch was measured useless).
+3. `bb test` doesn't source .env; made an integration test hermetic by asserting against the plan's :archive-folder instead of a hard-coded "[Gmail]/All Mail".
